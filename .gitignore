@@ -2,6 +2,7 @@
 
 # folder names
 logs/
+tokens/
 
 # custom
 .DS_Store
