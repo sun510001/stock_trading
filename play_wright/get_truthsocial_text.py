@@ -1,12 +1,11 @@
-"""
+'''
 Author: sun510001 sqf121@gmail.com
 Date: 2025-05-07 20:03:13
 LastEditors: sun510001 sqf121@gmail.com
 LastEditTime: 2025-05-07 20:03:13
 FilePath: /home_process/play_wright/get_truthsocial_text.py
 Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
-"""
-
+'''
 import time
 import random
 
@@ -19,18 +18,18 @@ from user_agent_gen import UserAgent
 
 def process_html(html):
     result = {}
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    username_tag = soup.find('p', string=lambda s: s and s.startswith('@'))
+    result['username'] = username_tag.get_text(strip=True)  
 
-    username_tag = soup.find("p", string=lambda s: s and s.startswith("@"))
-    result["username"] = username_tag.get_text(strip=True)
+    time_tag = soup.find('time')
+    # result['time_pass'] = time_tag.get_text(strip=True)  
+    result['time_title'] = time_tag.get('title')
 
-    time_tag = soup.find("time")
-    # result['time_pass'] = time_tag.get_text(strip=True)
-    result["time_title"] = time_tag.get("title")
-
-    main_text = username_tag.find_next("p")
-    raw_text = main_text.get_text(strip=True)
-    result["text"] = raw_text
+    main_text = username_tag.find_next('p')
+    raw_text = main_text.get_text(strip=True)   
+    result['text'] = raw_text
     return result
 
 
@@ -40,11 +39,11 @@ def get_latest_trump_post(url, user_agent, div):
         context = browser.new_context(user_agent=user_agent)
         page = context.new_page()
         page.goto(url, timeout=60000)
-
+        
         page.wait_for_selector(div)
         post = page.query_selector(div)
         # posts = page.query_selector_all(div)
-
+        
         # for post in posts:
         if post:
             html = post.inner_html()
@@ -64,9 +63,9 @@ if __name__ == "__main__":
     div = "div[class*='status__wrapper space-y-4 status-public p-4']"
     prev_text = {}
     count = 0
-
+    
     user_agent = UserAgent()
-
+    
     while True:
         count += 1
         wait_time = random.uniform(10.0, 20.0)
@@ -78,3 +77,5 @@ if __name__ == "__main__":
         if prev_text != text:
             prev_text = text
             logging.info(f"Get post: {text}")
+        
+
