@@ -1,17 +1,19 @@
-'''
+"""
 Author: sun510001 sqf121@gmail.com
 Date: 2025-05-08 00:46:17
 LastEditors: sun510001 sqf121@gmail.com
 LastEditTime: 2025-05-09 18:17:00
 FilePath: /home_process/stock_trading/logger.py
 Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
-'''
+"""
 
 import logging
 
 
 # 创建日志格式
-log_format = logging.Formatter('%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s', datefmt='%Y.%m.%d %H:%M:%S')
+log_format = logging.Formatter(
+    "%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s", datefmt="%Y.%m.%d %H:%M:%S"
+)
 
 # 创建根 logger，设置最低级别
 logger = logging.getLogger()

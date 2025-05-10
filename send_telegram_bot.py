@@ -1,11 +1,12 @@
-'''
+"""
 Author: sun510001 sqf121@gmail.com
 Date: 2025-05-09 18:05:03
 LastEditors: sun510001 sqf121@gmail.com
 LastEditTime: 2025-05-09 18:05:03
 FilePath: /stock_trading/tg_bot.py
 Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
-'''
+"""
+
 from telegram import Bot
 
 
@@ -17,8 +18,7 @@ class TelegramNotifier:
     @staticmethod
     def format_message(stock_id, current_info, indicators, suggestion):
         lines = [f"📈 Market Snapshot -> {stock_id}"]
-        lines += [f"├ {k.capitalize():<6}: {v}" for k,
-                  v in current_info.items()]
+        lines += [f"├ {k.capitalize():<6}: {v}" for k, v in current_info.items()]
 
         lines.append("\n📊 Technical Indicators")
         lines.append(f"├ RSI  : {indicators.get('RSI'):.2f}")
@@ -41,23 +41,15 @@ class TelegramNotifier:
 
 def main():
     import asyncio
+
     token = "xxxx"
     chat_id = "xxxx"
 
-    current_info = {
-        'close': 29.265,
-        'high': 29.27,
-        'low': 29.22,
-        'volume': 1743.0
-    }
+    current_info = {"close": 29.265, "high": 29.27, "low": 29.22, "volume": 1743.0}
     indicators = {
-        'RSI': 47.8806,
-        'MFI': 66.0124,
-        'KDJ': {
-            'K': 14.408,
-            'D': 13.629,
-            'J': 15.965
-        }
+        "RSI": 47.8806,
+        "MFI": 66.0124,
+        "KDJ": {"K": 14.408, "D": 13.629, "J": 15.965},
     }
     suggestion = "hold"
 
@@ -65,5 +57,5 @@ def main():
     asyncio.run(notifier.send_message(current_info, indicators, suggestion))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

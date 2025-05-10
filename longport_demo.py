@@ -1,4 +1,3 @@
-
 import asyncio
 import pandas as pd
 import pandas_ta as ta
@@ -8,9 +7,11 @@ from logger import logger
 from longport.openapi import Config, QuoteContext, Period, AdjustType
 from utils import get_time_difference_from_ny
 from datetime import datetime
+
 # from send_email import GmailStockNotifier
 from send_telegram_bot import TelegramNotifier
 from tokens.telegram import token, chat_id
+
 
 class LongPortSubscribe:
     def __init__(self, symbol: str, element_dict: Dict[str, int]):
@@ -37,7 +38,7 @@ class LongPortSubscribe:
                 "high": "float64",
                 "low": "float64",
                 "volume": "float64",
-                "timestamp": "float64"
+                "timestamp": "float64",
             }
         )
 
@@ -79,7 +80,7 @@ class LongPortSubscribe:
         max_period = max_key * 3
         min_period = max_key + 1
         if min_period <= min_offset <= 390:
-        # if True:
+            # if True:
             df = self.get_info(window_size=max_period)
             last_stock_info = df.iloc[-1].to_dict()
             dt_object = datetime.fromtimestamp(last_stock_info.get("timestamp", 0))
@@ -102,9 +103,9 @@ class LongPortSubscribe:
 
     @staticmethod
     def decision_func(mfi, kdj):
-        if mfi > 80 and kdj["K"] > 80 and kdj["D"] > 80:
+        if mfi > 79 and kdj["K"] > 79 and kdj["D"] > 79:
             return "SELL!"
-        elif mfi < 20 and kdj["K"] < 20 and kdj["D"] < 20:
+        elif mfi < 19 and kdj["K"] < 19 and kdj["D"] < 19:
             return "BUY!"
         else:
             return "HOLD!"
@@ -113,19 +114,34 @@ class LongPortSubscribe:
 def main():
     stock_id = "UVXY.US"
     element_dict = {"rsi": 12, "mfi": 9, "kdj": 9}
-    
+
     lp = LongPortSubscribe(symbol=stock_id, element_dict=element_dict)
 
+    previous_decision = "HOLD!"
     while True:
-        results, last_stock_info = lp.cal_indicators()
+        try:
+            results, last_stock_info = lp.cal_indicators()
+        except Exception as e:
+            logger.error(f"Error occurred: {e}")
+            results, last_stock_info = None, None
         if results:
             decision = lp.decision_func(mfi=results["MFI"], kdj=results["KDJ"])
             logger.info(f"Decision: {decision}")
 
-            if decision != "HOLD!":
-                notifier = TelegramNotifier(token, chat_id)
-                asyncio.run(notifier.send_message(stock_id, last_stock_info, results, decision))
-                sleep(4)  # Sleep to avoid spamming
+            if decision != previous_decision:
+                try:
+                    notifier = TelegramNotifier(token, chat_id)
+                    asyncio.run(
+                        notifier.send_message(
+                            stock_id, last_stock_info, results, decision
+                        )
+                    )
+                    previous_decision = decision
+                except Exception as e:
+                    logger.error(f"Error sending message: {e}")
+                # sleep(4)  # Sleep to avoid spamming
+            else:
+                logger.info(f"Decision remains the same: {decision}")
 
         sleep(1.05)
 

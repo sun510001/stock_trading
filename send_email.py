@@ -1,11 +1,11 @@
-'''
+"""
 Author: sun510001 sqf121@gmail.com
 Date: 2025-05-08 01:29:51
 LastEditors: sun510001 sqf121@gmail.com
 LastEditTime: 2025-05-09 18:06:13
 FilePath: /home_process/stock_trading/send_email.py
 Description: send email
-'''
+"""
 
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -15,7 +15,12 @@ from logger import logger
 
 class GmailStockNotifier:
     def __init__(
-        self, sender_email, app_password, receiver_email, smtp_server="smtp.gmail.com", smtp_port=465
+        self,
+        sender_email,
+        app_password,
+        receiver_email,
+        smtp_server="smtp.gmail.com",
+        smtp_port=465,
     ):
         """
         Initialize the notifier with Gmail credentials and receiver address.
