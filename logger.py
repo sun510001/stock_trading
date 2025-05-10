@@ -12,7 +12,7 @@ import logging
 
 # 创建日志格式
 log_format = logging.Formatter(
-    "%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s", datefmt="%Y.%m.%d %H:%M:%S"
+    "[%(asctime)s.%(msecs)03d][%(threadName)s][%(levelname)s] %(message)s", datefmt="%Y.%m.%d-%H:%M:%S"
 )
 
 # 创建根 logger，设置最低级别

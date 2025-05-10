@@ -17,7 +17,9 @@ class TelegramNotifier:
 
     @staticmethod
     def format_message(stock_id, current_info, indicators, suggestion):
-        lines = [f"📈 Market Snapshot -> {stock_id}"]
+        lines.append(f"💡 Suggestion: {suggestion}")
+        
+        lines = [f"\n📈 Market Snapshot -> {stock_id}"]
         lines += [f"├ {k.capitalize():<6}: {v}" for k, v in current_info.items()]
 
         lines.append("\n📊 Technical Indicators")
@@ -30,7 +32,6 @@ class TelegramNotifier:
         lines.append(f"   ├ D: {kdj.get('D', 0):.2f}")
         lines.append(f"   └ J: {kdj.get('J', 0):.2f}")
 
-        lines.append(f"\n💡 Suggestion: {suggestion}")
         return "\n".join(lines)
 
     async def send_message(self, stock_id, current_info, indicators, suggestion):
