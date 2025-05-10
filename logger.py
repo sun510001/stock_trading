@@ -8,26 +8,33 @@ Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查�
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
 
-
-# 创建日志格式
+# Create log formatter
 log_format = logging.Formatter(
-    "[%(asctime)s.%(msecs)03d][%(threadName)s][%(levelname)s] %(message)s", datefmt="%Y.%m.%d-%H:%M:%S"
+    "[%(asctime)s.%(msecs)03d][%(threadName)s][%(levelname)s] %(message)s",
+    datefmt="%Y.%m.%d-%H:%M:%S"
 )
 
-# 创建根 logger，设置最低级别
+# Create root logger and set level
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# 文件处理器：记录到文件
-file_handler = logging.FileHandler("logs/app.log", mode="a")
+# Rotating file handler: rotate when file size exceeds 1GB, keep up to 20 backup files
+file_handler = RotatingFileHandler(
+    filename="logs/app.log",
+    mode="a",
+    maxBytes=1 * 1024 * 1024 * 512,  # 500MB
+    backupCount=20,
+    encoding="utf-8"
+)
 file_handler.setFormatter(log_format)
 logger.addHandler(file_handler)
 
-# 终端处理器：输出到控制台
+# Console handler: output to terminal
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_format)
 logger.addHandler(console_handler)
 
-# 示例
+# Example log
 logger.info("Logger started.")

@@ -144,7 +144,7 @@ def pull_quote_thread(
         buy_threshold=buy_threshold,
     )
 
-    previous_decision = -2
+    previous_decision = 0
     while not stop_event.is_set():
         try:
             results, last_stock_info = lp.cal_indicators()
