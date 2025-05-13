@@ -2,8 +2,8 @@ import pytz
 from datetime import datetime, time
 
 
-def get_time_difference_from_ny(hour=9, minute=30):
-    ny_tz = pytz.timezone("America/New_York")
+def get_time_difference(hour=9, minute=30, region="America/New_York"):
+    ny_tz = pytz.timezone(region)
     now_ny = datetime.now(ny_tz)
     four_am_ny = ny_tz.localize(datetime.combine(now_ny.date(), time(hour, minute)))
     time_difference = now_ny - four_am_ny

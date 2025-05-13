@@ -1,25 +1,38 @@
+"""
+Author: sun510001 sqf121@gmail.com
+Date: 2025-05-14 00:21:00
+LastEditors: sun510001 sqf121@gmail.com
+LastEditTime: 2025-05-14 00:21:17
+FilePath: /stock_trading/longport_quote_demo.py
+Description:
+"""
+
 import asyncio
 import threading
-import pandas as pd
 from time import sleep
 from typing import Dict
-from logger import logger
+from datetime import datetime
+
+import pandas as pd
+
 from longport.openapi import (
     Config,
     QuoteContext,
     Period,
     AdjustType,
 )
-from utils.tools import get_time_difference_from_ny, get_time_offset
-from datetime import datetime
+
+from logger import logger
 
 # from send_email import GmailStockNotifier
 from utils.send_telegram_bot import TelegramNotifier
-from tokens.telegram import token, chat_id
 from utils.stock_indicators import StockIndicators
 
 # from utils.fixed_queue_df import FixedQueueDF
 from utils.global_param import shared_message_list, list_lock, Message, stop_event
+from utils.tools import get_time_difference, get_time_offset
+
+from tokens.telegram import token, chat_id
 
 
 class LongPortSubscribe:
@@ -43,13 +56,26 @@ class LongPortSubscribe:
         self.sell_threshold = sell_threshold
         self.buy_threshold = buy_threshold
 
+        #
+        if ".HK" in symbol:
+            self.region = "Asia/Hong_Kong"
+            self.hour = 9
+            self.minute = 30
+        elif ".US" in symbol:
+            self.region = "America/New_York"
+            self.hour = 9
+            self.minute = 30
+        else:
+            self.region = "America/New_York"
+            self.hour = 9
+            self.minute = 30
+
         # Load configuration from environment variables
         self.config = Config.from_env()  # Load configuration from environment variables
         self.quote_ctx = QuoteContext(self.config)
 
         max_key = max(self.element_dict.values())
-        self.max_period = max_key * 3
-        self.min_period = max_key + 1
+        self.min_period = max_key * 2
 
         self.stock_indicators = StockIndicators()
 
@@ -81,30 +107,39 @@ class LongPortSubscribe:
         )
 
     def cal_indicators(self):
-        min_offset = get_time_difference_from_ny()
+        min_offset = get_time_difference(
+            hour=self.hour, minute=self.minute, region=self.region
+        )
 
         if self.min_period <= min_offset <= 390:
             # if True:
-            df = self.get_info(window_size=self.max_period)
+            df = self.get_info(window_size=self.min_period)
             last_stock_info = df.iloc[-1].to_dict()
             dt_object = datetime.fromtimestamp(last_stock_info.get("timestamp", 0))
             offset_time = get_time_offset(dt_object)
-            if offset_time > 10:
-                logger.info(f"Time offset: {offset_time} seconds. Outside of trading hours. skipped.")
+            if offset_time > 65:
+                logger.info(
+                    f"Time offset: {offset_time} seconds. Outside of trading hours. skipped."
+                )
                 return None, None
-            
+
             if dt_object:
                 last_stock_info["timestamp"] = dt_object.strftime("%Y-%m-%d %H:%M:%S")
             rsi_value = self.stock_indicators.cal_rsi(df, self.element_dict["rsi"])
             mfi_value = self.stock_indicators.cal_mfi(df, self.element_dict["mfi"])
             kdj_values = self.stock_indicators.cal_kdj(df, self.element_dict["kdj"])
+            adx_values = self.stock_indicators.cal_adx(df, self.element_dict["adx"])
+
             logger.info(f"RSI: {rsi_value}")
             logger.info(f"MFI: {mfi_value}")
             logger.info(f"KDJ: {kdj_values}")
+            logger.info(f"ADX: {adx_values}")
+
             return {
                 "RSI": rsi_value,
                 "MFI": mfi_value,
                 "KDJ": kdj_values,
+                "ADX": adx_values,
             }, last_stock_info
         else:
             logger.info(f"[{min_offset}/{self.min_period}] On tracking...")
@@ -144,32 +179,66 @@ def pull_quote_thread(
         buy_threshold=buy_threshold,
     )
 
-    previous_decision = 0
+    previous_decisions = [-99, -99]
     while not stop_event.is_set():
         try:
             results, last_stock_info = lp.cal_indicators()
-        except Exception as e:
+        except (ConnectionError, asyncio.TimeoutError) as e:
             logger.error(f"Error occurred: {e}")
             results, last_stock_info = None, None
 
         if results:
-            decision = lp.decision_func(mfi=results["MFI"], kdj=results["KDJ"])
-            logger.info(f"Decision: {decision_dict[decision]}")
+            decision_mfi = lp.decision_func(mfi=results["MFI"], kdj=results["KDJ"])
+            logger.info(f"MFI+KDJ decision: {decision_dict[decision_mfi]}")
+            if results["ADX"]:
+                decision_adx = results["ADX"]["signal"]
+                encode_decision = decision_dict.get(results['ADX']['signal'], 'NO DATA!')
+                results["ADX"]["signal"] = encode_decision
+                logger.info(f"ADX decision: {encode_decision}")
+            else:
+                decision_adx = -1
+                logger.info("No ADX data available.")
 
-            if decision != previous_decision:
+            if (
+                decision_mfi != previous_decisions[0]
+                or decision_adx != previous_decisions[1]
+            ) and not (decision_mfi == 0 and decision_adx == 0):
+                # Decision changed and is not HOLD
                 with list_lock:
                     shared_message_list.append(
                         Message(
                             stock_id=stock_id,
                             current_info=last_stock_info,
                             indicators=results,
-                            suggestion=decision_dict[decision],
+                            suggestions={
+                                "mfi+kdj": decision_dict[decision_mfi],
+                                "adx": decision_dict[decision_adx],
+                            },
                         )
                     )
-                previous_decision = decision
+                previous_decisions[0] = decision_mfi
+                previous_decisions[1] = decision_adx
             else:
-                logger.info(f"Decision remains the same: {decision_dict[decision]}")
-        sleep(3)
+                logger.info(
+                    f"Decision remains the same: mfi+kdj {decision_dict[decision_mfi]}/adx {decision_dict[decision_adx]}"
+                )
+        else:
+            decision_mfi = -1
+            if decision_mfi != previous_decisions[0]:
+                with list_lock:
+                    shared_message_list.append(
+                        Message(
+                            stock_id=stock_id,
+                            current_info={},
+                            indicators={},
+                            suggestions={"mfi+kdj": decision_dict[decision_mfi]},
+                        )
+                    )
+                previous_decisions[0] = decision_mfi
+                logger.warning("No results available.")
+            else:
+                logger.info("No results available, decision remains the same.")
+        sleep(6)
 
 
 async def async_task(notifier: TelegramNotifier):
@@ -184,8 +253,13 @@ async def async_task(notifier: TelegramNotifier):
             # Send the message using the notifier
             logger.info(f"Sending message: {message}")
             try:
-                await notifier.send_message(message.stock_id, message.current_info, message.indicators, message.suggestion)
-            except Exception as e:
+                await notifier.send_message(
+                    message.stock_id,
+                    message.current_info,
+                    message.indicators,
+                    message.suggestions,
+                )
+            except (ConnectionError, asyncio.TimeoutError, ValueError) as e:
                 logger.error(f"Error sending message: {e}")
         await asyncio.sleep(0.1)
 
@@ -195,11 +269,11 @@ def send_message_thread(notifier: TelegramNotifier):
 
 
 def main():
-    symbols = ["TQQQ.US", "SQQQ.US"]
-    element_dict = {"rsi": 12, "mfi": 9, "kdj": 9}
-    decision_dict = {0: "HOLD!", 1: "BUY!", 2: "SELL!"}
-    sell_threshold = 79
-    buy_threshold = 19
+    symbols = ["NVDA.US"]
+    element_dict = {"rsi": 12, "mfi": 9, "kdj": 9, "adx": 14}
+    decision_dict = {0: "HOLD!", 1: "BUY!", 2: "SELL!", -1: "NO DATA!"}
+    sell_threshold = 85
+    buy_threshold = 15
     notifier = TelegramNotifier(token, chat_id)
 
     send_message_t = threading.Thread(target=send_message_thread, args=(notifier,))
@@ -219,6 +293,7 @@ def main():
             ),
         )
         t.start()
+        sleep(3)
         symbol_threads.append(t)
 
     try:
