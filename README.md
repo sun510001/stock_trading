@@ -25,7 +25,7 @@ project_root/
 │
 ├── strategies/
 │   ├── backtest_engine.py   # Core simulation engine (Time loop + algorithm execution)
-│   └── algorithms.py        # Library of rebalancing strategies (Static methods in class, private algorithms)
+│   └── algorithms.py        # Library of rebalancing strategies (Private algorithms)
 │
 ├── utils/
 │   ├── decorators.py        # Generic decorators (e.g., @retry)
