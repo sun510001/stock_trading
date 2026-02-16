@@ -123,6 +123,8 @@ python main_backtest.py
    ```
 2. Navigate to `http://127.0.0.1:8000/ui`.
 3. Configure parameters and click **Run Backtest**.
+<img width="1418" height="696" alt="image" src="https://github.com/user-attachments/assets/f8429523-75c2-446e-bbce-0c9021d61f0b" />
+<img width="1035" height="915" alt="image" src="https://github.com/user-attachments/assets/2bc5dcc4-a747-41e8-82be-884bc1013001" />
 
 ---
 
