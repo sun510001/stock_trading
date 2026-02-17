@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime
 from typing import Dict, Union, Optional, List, Callable
 from logger import logger
@@ -19,6 +20,7 @@ class BacktestEngine:
         self.data: Optional[pd.DataFrame] = None
         self.portfolio_value: Optional[pd.Series] = None
         self.drawdown: Optional[pd.Series] = None
+        self.asset_weights: Optional[pd.DataFrame] = None
 
         self._load_data()
 
@@ -32,42 +34,6 @@ class BacktestEngine:
         except Exception as e:
             logger.error(f"Failed to load data: {str(e)}")
             raise
-
-    def _compute_trend_score(
-        self,
-        df_slice: pd.DataFrame,
-        day_idx: int,
-        lookback_days: int,
-        model_type: str = "kmeans",
-    ) -> float:
-        """Compute trend score via strategies.trend_models.
-
-        当前实现仍然是占位逻辑, 但已通过模型接口抽象, 方便后续接入
-        K-means / Autoencoder / HMM 等真实无监督模型.
-        """
-        if lookback_days <= 0:
-            return 1.0
-
-        # 不足窗口长度时, 直接不给信号, 避免一开始就调仓
-        if day_idx < lookback_days:
-            return 0.0
-
-        window = df_slice.iloc[day_idx - lookback_days : day_idx]
-        if window.empty:
-            return 0.0
-
-        window_arr = window.values.astype(float)
-        model = get_trend_model(model_type=model_type)
-        trend_score = float(model.predict_score(window_arr))
-
-        # 统一截断到 [0,1]
-        trend_score = max(0.0, min(1.0, trend_score))
-
-        logger.info(
-            f"Trend model | day_idx={day_idx}, lookback={lookback_days}, "
-            f"score={trend_score:.3f}, model_type={model_type}"
-        )
-        return trend_score
 
     def run_backtest(
         self,
@@ -103,7 +69,7 @@ class BacktestEngine:
             logger.error("No data found for the specified date range!")
             return
 
-        # Optionally restrict to a subset of asset columns
+        # Optionally restrict to a subset of asset columns (strategy asset universe)
         if asset_cols:
             missing = [c for c in asset_cols if c not in df_slice.columns]
             if missing:
@@ -130,10 +96,13 @@ class BacktestEngine:
 
         # 3. Initialization
         portfolio_history = np.zeros(n_days)
+        weights_history = np.zeros((n_days, n_assets))
+
         start_prices = prices[0]
         target_allocation = self.initial_capital / n_assets
         current_units = (target_allocation / start_prices) * (1 - fees)
         portfolio_history[0] = float(np.sum(current_units * start_prices))
+        weights_history[0] = (current_units * start_prices) / portfolio_history[0]
 
         # 4. Time Loop
         for i in range(1, n_days):
@@ -141,13 +110,29 @@ class BacktestEngine:
             current_val = float(np.sum(current_units * today_prices))
 
             if i in rb_indices:
-                # 可选: 使用趋势模型决定是否执行本次调仓
+                signals = None
+
                 if use_trend_model and model_lookback_days > 0:
-                    trend_score = self._compute_trend_score(
-                        df_slice=df_slice,
-                        day_idx=i,
-                        lookback_days=model_lookback_days,
-                        model_type=model_type,
+                    if i < model_lookback_days:
+                        portfolio_history[i] = current_val
+                        weights_history[i] = (current_units * today_prices) / current_val
+                        continue
+
+                    window = df_slice.iloc[i - model_lookback_days : i]
+                    if window.empty:
+                        portfolio_history[i] = current_val
+                        weights_history[i] = (current_units * today_prices) / current_val
+                        continue
+
+                    window_arr = window.values.astype(float)
+                    model = get_trend_model(model_type=model_type)
+
+                    # Global trend score used to decide whether to allow rebalancing at this index
+                    trend_score = float(model.predict_score(window_arr))
+                    trend_score = max(0.0, min(1.0, trend_score))
+                    logger.info(
+                        f"Trend model | day_idx={i}, lookback={model_lookback_days}, "
+                        f"score={trend_score:.3f}, model_type={model_type}"
                     )
                     if trend_score < model_threshold:
                         logger.info(
@@ -155,19 +140,39 @@ class BacktestEngine:
                             f"(threshold={model_threshold:.3f})"
                         )
                         portfolio_history[i] = current_val
+                        weights_history[i] = (current_units * today_prices) / current_val
                         continue
 
-                current_units, current_val = rebalance_fn(
-                    current_units=current_units,
-                    prices=today_prices,
-                    fees=fees,
-                )
+                    # 每个资产的信号, 供信号加权算法使用
+                    signals = model.predict_asset_scores(window_arr)
+
+                # 根据是否为信号加权算法选择不同调用方式
+                if (
+                    rebalance_fn is RebalanceAlgorithms.signal_weighted_rebalance
+                    and signals is not None
+                ):
+                    current_units, current_val = rebalance_fn(
+                        current_units=current_units,
+                        prices=today_prices,
+                        fees=fees,
+                        signals=signals,
+                    )
+                else:
+                    current_units, current_val = rebalance_fn(
+                        current_units=current_units,
+                        prices=today_prices,
+                        fees=fees,
+                    )
 
             portfolio_history[i] = current_val
+            weights_history[i] = (current_units * today_prices) / current_val
 
         # 5. Finalize
         self.portfolio_value = pd.Series(
             portfolio_history, index=dates, name="Portfolio Value"
+        )
+        self.asset_weights = pd.DataFrame(
+            weights_history, index=dates, columns=df_slice.columns
         )
         running_max = self.portfolio_value.cummax()
         self.drawdown = (self.portfolio_value / running_max) - 1
@@ -187,7 +192,11 @@ class BacktestEngine:
             self.portfolio_value.index[-1] - self.portfolio_value.index[0]
         ).days / 365.25
         cagr = (end_val / start_val) ** (1 / n_years) - 1
-        sharpe = (returns.mean() / returns.std()) * np.sqrt(252) if returns.std() != 0 else 0
+        sharpe = (
+            (returns.mean() / returns.std()) * np.sqrt(252)
+            if returns.std() != 0
+            else 0
+        )
         max_dd = self.drawdown.min() if self.drawdown is not None else 0
         vol = returns.std() * np.sqrt(252)
 
@@ -225,16 +234,51 @@ class BacktestEngine:
         else:
             benchmark_list = list(benchmark_cols)
 
-        fig = go.Figure()
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.06,
+            row_heights=[0.65, 0.35],
+            subplot_titles=(
+                f"Performance: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}",
+                "Portfolio Weights",
+            ),
+        )
+
+        # Strategy stats
+        strat_rets = self.portfolio_value.pct_change().dropna()
+        strat_years = (end_date - start_date).days / 365.25
+        strat_cagr = (
+            (self.portfolio_value.iloc[-1] / self.portfolio_value.iloc[0])
+            ** (1 / strat_years)
+            - 1
+        )
+        strat_sharpe = (
+            (strat_rets.mean() / strat_rets.std()) * np.sqrt(252)
+            if strat_rets.std() != 0
+            else 0
+        )
+        strat_running_max = self.portfolio_value.cummax()
+        strat_dd = (self.portfolio_value / strat_running_max) - 1
+        strat_max_dd = strat_dd.min()
         strat_total_ret = strategy_norm.iloc[-1]
+
         fig.add_trace(
             go.Scatter(
                 x=strategy_norm.index,
                 y=strategy_norm,
                 mode="lines",
-                name=f"Strategy | Total: {strat_total_ret:.1%}",
+                name=(
+                    f"Strategy | Total: {strat_total_ret:.1%}, "
+                    f"CAGR: {strat_cagr:.1%}, "
+                    f"Sharpe: {strat_sharpe:.2f}, "
+                    f"MaxDD: {strat_max_dd:.1%}"
+                ),
                 line=dict(color="#00CC96", width=2),
-            )
+            ),
+            row=1,
+            col=1,
         )
 
         default_colors = [
@@ -251,25 +295,73 @@ class BacktestEngine:
                 if not bench_series.empty:
                     bench_norm = (bench_series / bench_series.iloc[0]) - 1
                     bench_total_ret = bench_norm.iloc[-1]
+
+                    bench_rets = bench_series.pct_change().dropna()
+                    years = (bench_series.index[-1] - bench_series.index[0]).days / 365.25
+                    cagr = (
+                        (bench_series.iloc[-1] / bench_series.iloc[0])
+                        ** (1 / years)
+                        - 1
+                    )
+                    sharpe = (
+                        (bench_rets.mean() / bench_rets.std()) * np.sqrt(252)
+                        if bench_rets.std() != 0
+                        else 0
+                    )
+                    running_max = bench_series.cummax()
+                    dd = (bench_series / running_max) - 1
+                    max_dd = dd.min()
+
                     color = default_colors[idx % len(default_colors)]
                     fig.add_trace(
                         go.Scatter(
                             x=bench_norm.index,
                             y=bench_norm,
                             mode="lines",
-                            name=f"Benchmark ({col}) | Total: {bench_total_ret:.1%}",
+                            name=(
+                                f"Benchmark ({col}) | Total: {bench_total_ret:.1%}, "
+                                f"CAGR: {cagr:.1%}, "
+                                f"Sharpe: {sharpe:.2f}, "
+                                f"MaxDD: {max_dd:.1%}"
+                            ),
                             line=dict(color=color, width=1, dash="dot"),
-                        )
+                        ),
+                        row=1,
+                        col=1,
                     )
 
+        # Weights subplot (stacked area)
+        if self.asset_weights is not None and not self.asset_weights.empty:
+            w_df = self.asset_weights.loc[start_date:end_date]
+            for idx, col in enumerate(w_df.columns):
+                color = default_colors[idx % len(default_colors)]
+                fig.add_trace(
+                    go.Scatter(
+                        x=w_df.index,
+                        y=w_df[col],
+                        mode="lines",
+                        name=f"Weight {col}",
+                        stackgroup="weights",
+                        line=dict(width=0.5, color=color),
+                        opacity=0.8,
+                    ),
+                    row=2,
+                    col=1,
+                )
+
+        fig.update_xaxes(title_text="Date", row=2, col=1)
+        fig.update_yaxes(
+            title_text="Cumulative Return (%)", tickformat=".0%", row=1, col=1
+        )
+        fig.update_yaxes(
+            title_text="Portfolio Weights", tickformat=".0%", row=2, col=1
+        )
+
         fig.update_layout(
-            title=(
-                f"Performance Comparison: {start_date.strftime('%Y-%m-%d')} "
-                f"to {end_date.strftime('%Y-%m-%d')}"
+            title= (
+                f"Strategy & Benchmarks with Weights | "
+                f"{start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
             ),
-            xaxis_title="Date",
-            yaxis_title="Cumulative Return (%)",
-            yaxis_tickformat=".0%",
             template="plotly_dark",
             hovermode="x unified",
             legend=dict(

@@ -1,3 +1,13 @@
+# Updates
+
+- **2026-02-17**
+  - Added UI controls for configuring an unsupervised trend model (model type, fixed lookback window, threshold) and wiring it through the backtest engine.
+  - Introduced a new `signal_weighted_rebalance` algorithm option that tilts portfolio weights based on per-asset trend signals (implementation details remain private).
+  - Enhanced the Performance Chart to display Total Return, CAGR, Sharpe Ratio, and Max Drawdown for both the strategy and all selected benchmarks.
+  - Added a second subplot below the performance chart that shows the portfolio's asset weights over time as a stacked area plot.
+
+---
+
 # Stock Trading Backtest System
 
 A Python-based multi-asset backtesting system featuring automated data downloading, yield-to-price pricing engines, a core backtest engine with pluggable rebalancing algorithms, and an interactive FastAPI-based web console.
@@ -91,12 +101,14 @@ project_root/
 ## Installation
 
 ### 1. Create Virtual Environment (Recommended)
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ```
 
 ### 2. Install Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -106,29 +118,36 @@ pip install -r requirements.txt
 ## Usage Guide
 
 ### 1. Data Setup
+
 1. Define assets in `config/assets.json` or via the Web UI.
 2. Run data synchronization:
+
    ```bash
    python main_download.py
    ```
 
 ### 2. Running Simulations
+
 ```bash
 mv strategies/algorithms_template.py strategies/algorithms.py
 ```
+
 #### Via CLI
+
 ```bash
 python main_backtest.py
 ```
+
 #### Via Web UI
+
 1. Start the server:
+
    ```bash
    python backend/api.py
    ```
+
 2. Navigate to `http://127.0.0.1:8000/ui`.
 3. Configure parameters and click **Run Backtest**.
-<img width="1418" height="696" alt="image" src="https://github.com/user-attachments/assets/f8429523-75c2-446e-bbce-0c9021d61f0b" />
-<img width="1035" height="915" alt="image" src="https://github.com/user-attachments/assets/2bc5dcc4-a747-41e8-82be-884bc1013001" />
 
 ---
 
