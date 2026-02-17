@@ -35,7 +35,6 @@ project_root/
 │
 ├── strategies/
 │   ├── backtest_engine.py      # Core simulation engine (Time loop + algorithm execution)
-│   ├── algorithms.py           # Library of rebalancing strategies (Private algorithms)
 |   └── algorithms_template.py  # A template for algorithms.py
 │
 ├── utils/

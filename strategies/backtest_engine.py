@@ -8,7 +8,6 @@ from typing import Dict, Union, Optional, List, Callable
 from logger import logger
 
 from strategies.algorithms import RebalanceAlgorithms
-from strategies.trend_models import get_trend_model
 
 
 class BacktestEngine:
@@ -53,6 +52,9 @@ class BacktestEngine:
         logger.info(
             f"Preparing simulation for range: {start_date or 'Start'} to {end_date or 'End'}..."
         )
+        
+        if use_trend_model:
+            from strategies.trend_models import get_trend_model
 
         if self.data is None:
             logger.error("No data available for backtest.")
