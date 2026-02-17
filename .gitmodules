@@ -1,0 +1,3 @@
+[submodule ".private_data"]
+	path = .private_data
+	url = https://github.com/sun510001/stock_trading_private.git
