@@ -159,7 +159,7 @@ class YahooIncrementalLoader:
         logger.info("="*40)
         
         for asset in assets:
-            time.sleep(30)
+            time.sleep(2)
             name = asset["name"]
             ticker = asset["ticker"]
             asset_start_date = asset.get("initial_start_date") or asset.get("start_date")

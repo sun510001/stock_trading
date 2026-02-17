@@ -148,9 +148,10 @@ python main_backtest.py
 2. Navigate to `http://127.0.0.1:8000/ui`.
 3. Configure parameters and click **Run Backtest**.
 
+![项目截图](./assets/ui.png)
 ---
 
 ## FAQ
 
-- **Rate Limiting**: The Yahoo Finance downloader is subject to API rate limits. The system implements a 60-second cooldown on the download endpoint.
+- **Rate Limiting**: The Yahoo Finance downloader is subject to API rate limits. The system implements a 2-second cooldown on the download endpoint.
 - **Adding Algorithms**: New strategies can be added as static methods ending in `_rebalance` within `strategies/algorithms.py`. They will be automatically detected by the system.
