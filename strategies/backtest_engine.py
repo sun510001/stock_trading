@@ -7,19 +7,13 @@ from typing import Dict, Union, Optional, List, Callable
 from logger import logger
 
 from strategies.algorithms import RebalanceAlgorithms
+from strategies.trend_models import get_trend_model
 
 
 class BacktestEngine:
-    """
-    A Production-Grade, Pure Pandas/NumPy Backtest Engine.
-
-    This class handles the core logic for portfolio backtesting, including
-    data slicing, rebalancing simulation, performance statistics calculation,
-    and interactive result visualization.
-    """
+    """Core backtest engine handling simulation and visualization."""
 
     def __init__(self, data_path: str, initial_capital: float = 10000.0) -> None:
-        """Initialize the BacktestEngine."""
         self.data_path: str = data_path
         self.initial_capital: float = initial_capital
         self.data: Optional[pd.DataFrame] = None
@@ -39,6 +33,42 @@ class BacktestEngine:
             logger.error(f"Failed to load data: {str(e)}")
             raise
 
+    def _compute_trend_score(
+        self,
+        df_slice: pd.DataFrame,
+        day_idx: int,
+        lookback_days: int,
+        model_type: str = "kmeans",
+    ) -> float:
+        """Compute trend score via strategies.trend_models.
+
+        当前实现仍然是占位逻辑, 但已通过模型接口抽象, 方便后续接入
+        K-means / Autoencoder / HMM 等真实无监督模型.
+        """
+        if lookback_days <= 0:
+            return 1.0
+
+        # 不足窗口长度时, 直接不给信号, 避免一开始就调仓
+        if day_idx < lookback_days:
+            return 0.0
+
+        window = df_slice.iloc[day_idx - lookback_days : day_idx]
+        if window.empty:
+            return 0.0
+
+        window_arr = window.values.astype(float)
+        model = get_trend_model(model_type=model_type)
+        trend_score = float(model.predict_score(window_arr))
+
+        # 统一截断到 [0,1]
+        trend_score = max(0.0, min(1.0, trend_score))
+
+        logger.info(
+            f"Trend model | day_idx={day_idx}, lookback={lookback_days}, "
+            f"score={trend_score:.3f}, model_type={model_type}"
+        )
+        return trend_score
+
     def run_backtest(
         self,
         start_date: Optional[str] = None,
@@ -48,6 +78,10 @@ class BacktestEngine:
         rebalance_fn: Callable = RebalanceAlgorithms.permanent_portfolio_rebalance,
         rebalance_interval_days: Optional[int] = None,
         asset_cols: Optional[List[str]] = None,
+        use_trend_model: bool = False,
+        model_lookback_days: int = 60,
+        model_threshold: float = 0.5,
+        model_type: str = "kmeans",
     ) -> None:
         """Execute the backtest simulation."""
         logger.info(
@@ -107,6 +141,22 @@ class BacktestEngine:
             current_val = float(np.sum(current_units * today_prices))
 
             if i in rb_indices:
+                # 可选: 使用趋势模型决定是否执行本次调仓
+                if use_trend_model and model_lookback_days > 0:
+                    trend_score = self._compute_trend_score(
+                        df_slice=df_slice,
+                        day_idx=i,
+                        lookback_days=model_lookback_days,
+                        model_type=model_type,
+                    )
+                    if trend_score < model_threshold:
+                        logger.info(
+                            f"Rebalance skipped at index {i} due to low trend_score={trend_score:.3f} "
+                            f"(threshold={model_threshold:.3f})"
+                        )
+                        portfolio_history[i] = current_val
+                        continue
+
                 current_units, current_val = rebalance_fn(
                     current_units=current_units,
                     prices=today_prices,

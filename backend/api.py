@@ -117,6 +117,30 @@ class APIManager:
             <label>Benchmarks (comma separated)</label>
             <input type='text' id='benchmark_cols' value='Nasdaq100, GoldIndex, US30Y, US3M'>
           </div>
+          <div class="border-t border-gray-700 pt-3 mt-3">
+            <label class="flex items-center gap-2 text-sm">
+              <input type='checkbox' id='use_trend_model' />
+              <span>Use Trend Model</span>
+            </label>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <label>Trend Model Type</label>
+                <select id='model_type'>
+                  <option value='kmeans'>kmeans</option>
+                  <option value='autoencoder'>autoencoder</option>
+                  <option value='hmm'>hmm</option>
+                </select>
+              </div>
+              <div>
+                <label>Lookback Days (fixed window)</label>
+                <input type='number' id='model_lookback_days' value='60'>
+              </div>
+              <div>
+                <label>Trend Threshold [0,1]</label>
+                <input type='number' id='model_threshold' value='0.5' step='0.05' min='0' max='1'>
+              </div>
+            </div>
+          </div>
           <button type='submit' id='run-btn' class="w-full mt-2">Run Backtest</button>
           <div id='error-msg' class='error'></div>
         </form>
@@ -337,6 +361,14 @@ class APIManager:
         rebalance_interval_days: document.getElementById('rebalance_interval_days').value
           ? parseInt(document.getElementById('rebalance_interval_days').value)
           : null,
+        use_trend_model: document.getElementById('use_trend_model').checked,
+        model_type: document.getElementById('model_type').value,
+        model_lookback_days: document.getElementById('model_lookback_days').value
+          ? parseInt(document.getElementById('model_lookback_days').value)
+          : 60,
+        model_threshold: document.getElementById('model_threshold').value
+          ? parseFloat(document.getElementById('model_threshold').value)
+          : 0.5,
       };
 
       // If user leaves strategy assets empty, send null so backend uses all columns
@@ -444,7 +476,8 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
                 if not df.empty:
                     d_start = df.index.min().date().isoformat()
                     d_end = df.index.max().date().isoformat()
-            except Exception: pass
+            except Exception:
+                pass
 
         results.append(AssetModels.AssetWithMeta(**asset, data_start_date=d_start, data_end_date=d_end))
     return results

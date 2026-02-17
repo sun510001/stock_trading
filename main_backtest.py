@@ -22,16 +22,7 @@ class BacktestRunner:
         fees: float = 0.0005,
         rebalance_freq: str = 'QE'
     ) -> None:
-        """
-        Initialize the backtest runner with configuration settings.
-
-        Args:
-            data_file (str): Path to the aligned CSV data file.
-            output_dir (str): Directory where result HTML files will be saved.
-            initial_capital (float): Initial capital for the simulation. Defaults to 100000.0.
-            fees (float): Transaction fee rate (e.g., 0.0005 for 5bps). Defaults to 0.0005.
-            rebalance_freq (str): Calendar frequency for rebalancing. Defaults to 'QE'.
-        """
+        """Initialize the backtest runner with configuration settings."""
         self.data_file: str = data_file
         self.output_dir: str = output_dir
         self.initial_capital: float = initial_capital
@@ -43,17 +34,13 @@ class BacktestRunner:
         start_date: Optional[str] = '2017-01-01', 
         end_date: Optional[str] = '2026-02-05',
         benchmarks: Optional[List[str]] = None,
-        rebalance_fn = RebalanceAlgorithms.permanent_portfolio_rebalance
+        rebalance_fn = RebalanceAlgorithms.permanent_portfolio_rebalance,
+        use_trend_model: bool = False,
+        model_lookback_days: int = 60,
+        model_threshold: float = 0.5,
+        model_type: str = "kmeans",
     ) -> None:
-        """
-        Execute the backtest and generate results.
-
-        Args:
-            start_date (Optional[str]): Start date for the simulation (YYYY-MM-DD).
-            end_date (Optional[str]): End date for the simulation (YYYY-MM-DD).
-            benchmarks (Optional[List[str]]): List of asset names to plot as benchmarks.
-            rebalance_fn (Callable): The rebalancing algorithm to use.
-        """
+        """Execute the backtest and generate results."""
         if benchmarks is None:
             benchmarks = ['Nasdaq100', 'GoldIndex', 'US30Y', 'US3M']
 
@@ -71,7 +58,13 @@ class BacktestRunner:
                 end_date=end_date,
                 rebalance_freq=self.rebalance_freq, 
                 fees=self.fees,
-                rebalance_fn=rebalance_fn
+                rebalance_fn=rebalance_fn,
+                rebalance_interval_days=None,
+                asset_cols=None,
+                use_trend_model=use_trend_model,
+                model_lookback_days=model_lookback_days,
+                model_threshold=model_threshold,
+                model_type=model_type,
             )
             
             # 3. Output Performance Statistics
@@ -118,7 +111,18 @@ if __name__ == "__main__":
         rebalance_freq='QE'
     )
     
+    # 示例1：不开启趋势模型（保持原行为）
+    # runner.run(
+    #     start_date='2017-01-01',
+    #     end_date='2026-02-05',
+    # )
+
+    # 示例2：开启趋势模型占位逻辑
     runner.run(
         start_date='2017-01-01',
-        end_date='2026-02-05'
+        end_date='2026-02-05',
+        use_trend_model=True,
+        model_lookback_days=60,
+        model_threshold=0.6,
+        model_type="hmm",
     )

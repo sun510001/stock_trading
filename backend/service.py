@@ -47,6 +47,23 @@ class BacktestConfig(BaseModel):
             "if None, all columns in the data file will be used"
         ),
     )
+    # Trend model-related configuration
+    use_trend_model: bool = Field(
+        default=False,
+        description="Whether to enable the unsupervised trend model to gate rebalancing",
+    )
+    model_type: str = Field(
+        default="kmeans",
+        description="Trend model type: 'kmeans', 'autoencoder', or 'hmm'",
+    )
+    model_lookback_days: int = Field(
+        default=60,
+        description="Number of past days used as the fixed window for the trend model",
+    )
+    model_threshold: float = Field(
+        default=0.5,
+        description="Trend score threshold in [0,1]; only rebalance when score >= threshold",
+    )
 
 
 class BacktestResult(BaseModel):
@@ -109,6 +126,10 @@ class BacktestService:
             rebalance_fn=rebalance_fn,
             rebalance_interval_days=cfg.rebalance_interval_days,
             asset_cols=cfg.asset_cols,
+            use_trend_model=cfg.use_trend_model,
+            model_lookback_days=cfg.model_lookback_days,
+            model_threshold=cfg.model_threshold,
+            model_type=cfg.model_type,
         )
 
         # Gather results

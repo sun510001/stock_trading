@@ -63,4 +63,6 @@ src/testTestingRootWkspc/coverageWorkspace/.coverage
 
 data/*
 data_processed/*
-strategies/algorithms.py
+strategies/*
+!strategies/algorithms_template.py
+!strategies/backtest_engine.py

@@ -24,8 +24,9 @@ project_root/
 │   └── data_processor.py    # Yield-to-price conversion and multi-asset alignment
 │
 ├── strategies/
-│   ├── backtest_engine.py   # Core simulation engine (Time loop + algorithm execution)
-│   └── algorithms.py        # Library of rebalancing strategies (Private algorithms)
+│   ├── backtest_engine.py      # Core simulation engine (Time loop + algorithm execution)
+│   ├── algorithms.py           # Library of rebalancing strategies (Private algorithms)
+|   └── algorithms_template.py  # A template for algorithms.py
 │
 ├── utils/
 │   ├── decorators.py        # Generic decorators (e.g., @retry)
@@ -112,6 +113,9 @@ pip install -r requirements.txt
    ```
 
 ### 2. Running Simulations
+```bash
+mv strategies/algorithms_template.py strategies/algorithms.py
+```
 #### Via CLI
 ```bash
 python main_backtest.py
