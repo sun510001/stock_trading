@@ -8,6 +8,7 @@ import time
 from typing import Dict, List, Any, Optional
 from logger import logger
 from utils.decorators import ExecutionDecorators
+from utils.naming import sanitize_filename
 
 class YahooIncrementalLoader:
     """
@@ -28,23 +29,6 @@ class YahooIncrementalLoader:
         self.storage_path: str = storage_path
         if not os.path.exists(self.storage_path):
             os.makedirs(self.storage_path)
-
-    @staticmethod
-    def sanitize_filename(name: str) -> str:
-        """
-        Sanitize the asset name to be used as a safe filename.
-        Removes or replaces characters like ^, /, \, etc.
-
-        Args:
-            name (str): The raw asset name to be sanitized.
-
-        Returns:
-            str: A filesystem-safe lowercase string.
-        """
-        # Replace any character that is not a letter, number, hyphen, or underscore with '_'
-        s = re.sub(r'[^\w\s-]', '', name).strip()
-        s = re.sub(r'[-\s]+', '_', s)
-        return s.lower()
 
     def _get_existing_data(self, file_path: str) -> pd.DataFrame:
         """
@@ -76,7 +60,7 @@ class YahooIncrementalLoader:
             name (str): Logical name for the asset.
             start_date_fallback (str): Start date if no local data exists (YYYY-MM-DD).
         """
-        safe_name = self.sanitize_filename(name)
+        safe_name = sanitize_filename(name)
         file_path = os.path.join(self.storage_path, f"{safe_name}.csv")
         df_old = self._get_existing_data(file_path)
         

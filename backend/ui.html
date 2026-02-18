@@ -18,138 +18,220 @@
     .stat-value { font-size:18px; font-weight:bold; }
     .error { background:#611; border:1px solid #a33; border-radius:6px; padding:8px; margin-top:8px; display:none; }
     iframe { width:100%; height:1000px; border:none; border-radius:6px; background:#000; }
-    @media (min-width: 900px) {
-      .main-layout { display:grid; grid-template-columns:360px 1fr; gap:16px; }
-      .right-col { display:flex; flex-direction:column; gap:16px; }
+    
+    .main-layout { display:flex; flex-direction:column; gap:16px; }
+    .top-layout { display:flex; flex-direction:column; gap:16px; }
+    .bottom-layout { display:flex; flex-direction:column; gap:16px; }
+    @media (min-width: 1024px) {
+      .top-layout { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; align-items:stretch; }
     }
+    .top-layout .panel { height:100%; display: flex; flex-direction: column; }
     table { width:100%; border-collapse:collapse; margin-top:8px; font-size:12px; }
     th, td { border:1px solid #333; padding:4px 6px; text-align:left; }
-    th { background:#222; }
+    th { background:#222; position: sticky; top: 0; z-index: 10; }
+
+    /* Toggle switch for trend model */
+    .toggle-wrapper { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; }
+    .toggle-track {
+      width:34px;
+      height:18px;
+      border-radius:9999px;
+      background:#333;
+      position:relative;
+      transition:background-color 0.2s;
+      flex-shrink:0;
+    }
+    .toggle-thumb {
+      position:absolute;
+      top:2px;
+      left:2px;
+      width:14px;
+      height:14px;
+      border-radius:9999px;
+      background:#ddd;
+      transition:transform 0.2s;
+    }
+    .toggle-input:checked + .toggle-track {
+      background:#2563eb;
+    }
+    .toggle-input:checked + .toggle-track .toggle-thumb {
+      transform:translateX(16px);
+    }
+
+    /* Drag & Drop Styles */
+    .asset-pool { min-height: 40px; padding: 8px; border: 1px solid #333; border-radius: 6px; background: #151515; display: flex; flex-wrap: wrap; gap: 6px; }
+    .dropzone { min-height: 44px; padding: 6px; border: 2px dashed #444; border-radius: 6px; background: #222; display: flex; flex-wrap: wrap; gap: 6px; transition: border-color 0.2s; }
+    .dropzone.drag-over { border-color: #0af; background: #282828; }
+    .asset-chip { padding: 4px 10px; background: #333; border: 1px solid #555; border-radius: 9999px; font-size: 12px; cursor: grab; user-select: none; display: flex; align-items: center; gap: 4px; }
+    .asset-chip:active { cursor: grabbing; }
+    .asset-chip .remove-btn { cursor: pointer; font-weight: bold; color: #ff4444; margin-left: 4px; }
+    .asset-chip.in-use { opacity: 0.4; cursor: default; }
   </style>
 </head>
 <body>
-  <div class='max-w-[1400px] mx-auto'>
+  <div class='max-w-[1600px] mx-auto'>
     <h1 class="text-3xl font-bold mb-2">Backtest Console</h1>
     <p class="text-gray-500 mb-6">Manage assets, configure strategy parameters, and analyze performance.</p>
     
     <div class='main-layout'>
-      <!-- LEFT COLUMN: Configuration Panel -->
-      <div class='panel self-start'>
-        <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Configuration</h2>
-        <form id='backtest-form' class="space-y-4">
-          <div>
-            <label>Algorithm</label>
-            <select id='algorithm' name='algorithm'></select>
-          </div>
-          <div class="flex gap-2">
-            <div class="flex-1">
-              <label>Start Date</label>
-              <input type='date' id='start_date' value='2016-01-01'>
-            </div>
-            <div class="flex-1">
-              <label>End Date</label>
-              <input type='date' id='end_date' value='2026-01-01'>
-            </div>
-          </div>
-          <div>
-            <label>Initial Capital</label>
-            <input type='number' id='initial_capital' value='100000'>
-          </div>
-          <div>
-            <label>Rebalance Interval (days, optional)</label>
-            <input type='number' id='rebalance_interval_days' placeholder='e.g. 30'>
-          </div>
-          <div>
-            <label>Strategy Assets (comma separated, empty = all)</label>
-            <input type='text' id='asset_cols' placeholder='e.g. Nasdaq100, GoldIndex, US30Y, US3M'>
-          </div>
-          <div>
-            <label>Benchmarks (comma separated)</label>
-            <input type='text' id='benchmark_cols' value='Nasdaq100, GoldIndex, US30Y, US3M'>
-          </div>
-          <div class="border-t border-gray-700 pt-3 mt-3">
-            <label class="flex items-center gap-2 text-sm">
-              <input type='checkbox' id='use_trend_model' />
-              <span>Use Trend Model (unsupervised signal to gate rebalancing)</span>
-            </label>
-            <div class="mt-2 grid grid-cols-2 gap-2">
-              <div>
-                <label>Trend Model Type</label>
-                <select id='model_type'>
-                  <option value='kmeans'>kmeans</option>
-                  <option value='autoencoder'>autoencoder</option>
-                  <option value='hmm'>hmm</option>
-                </select>
+      <div class='top-layout'>
+        <!-- LEFT: Configuration Panel -->
+        <div class='panel self-start'>
+          <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Configuration</h2>
+          <form id='backtest-form' class="flex-1 flex flex-col justify-between space-y-4">
+            <div class="space-y-4">
+              <!-- Basic Parameters Group -->
+              <div class="grid grid-cols-2 gap-3">
+                <div class="col-span-2">
+                  <label>Algorithm</label>
+                  <select id='algorithm' name='algorithm'></select>
+                </div>
+                <div>
+                  <label>Initial Capital</label>
+                  <input type='number' id='initial_capital' value='100000'>
+                </div>
+                <div>
+                  <label>Rebalance Interval (days)</label>
+                  <input type='number' id='rebalance_interval_days' placeholder='e.g. 30'>
+                </div>
+                <div>
+                  <label>Start Date</label>
+                  <input type='date' id='start_date' value='2016-01-01'>
+                </div>
+                <div>
+                  <label>End Date</label>
+                  <input type='date' id='end_date' value='2026-01-01'>
+                </div>
               </div>
-              <div>
-                <label>Lookback Days (fixed window)</label>
-                <input type='number' id='model_lookback_days' value='60'>
-              </div>
-              <div>
-                <label>Trend Threshold [0,1]</label>
-                <input type='number' id='model_threshold' value='0.5' step='0.05' min='0' max='1'>
-              </div>
-            </div>
-          </div>
-          <button type='submit' id='run-btn' class="w-full mt-2">Run Backtest</button>
-          <div id='error-msg' class='error'></div>
-        </form>
-      </div>
 
-      <!-- RIGHT COLUMN: Assets & Results -->
-      <div class='right-col'>
-        <!-- Assets Section -->
-        <div class='panel'>
-          <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Assets Management</h2>
-          <div class="flex gap-2 mb-4">
-            <button type='button' id='refresh-assets-btn' class="bg-gray-700">Refresh List</button>
-            <button type='button' id='download-assets-btn' class="bg-orange-600 hover:bg-orange-500">Download & Process Data</button>
-          </div>
-          <table id='assets-table'>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Ticker</th>
-                <th>Kind</th>
-                <th>Engine</th>
-                <th>Data Start</th>
-                <th>Data End</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+              <!-- Asset Selection Group -->
+              <div class="space-y-3 pt-2 border-t border-gray-700 mt-2">
+                <div class="flex items-center justify-between">
+                  <label class="text-sm font-semibold text-blue-400">Asset Pool (Drag from here)</label>
+                  <button type="button" id="clear-selection-btn" class="text-[10px] px-2 py-0.5 bg-gray-700 hover:bg-red-900 rounded text-gray-300 transition-colors">Clear All</button>
+                </div>
+                <div id="asset-pool" class="asset-pool"></div>
 
-          <h3 class="text-md font-bold mt-6 mb-2 text-blue-400">Add / Edit Asset</h3>
-          <form id='asset-form' class="grid grid-cols-2 gap-3">
-            <input type='hidden' id='asset_original_name'>
-            <div><label>Name</label><input type='text' id='asset_name'></div>
-            <div><label>Ticker</label><input type='text' id='asset_ticker'></div>
-            <div>
-              <label>Kind</label>
-              <select id='asset_kind'>
-                <option value='price'>price</option>
-                <option value='yield'>yield</option>
-              </select>
+                <div>
+                  <label class="text-xs text-gray-400">Strategy Assets</label>
+                  <div id="strategy-dropzone" class="dropzone" data-type="strategy"></div>
+                  <input type='hidden' id='asset_cols'>
+                </div>
+
+                <div>
+                  <label class="text-xs text-gray-400">Benchmarks</label>
+                  <div id="benchmark-dropzone" class="dropzone" data-type="benchmark"></div>
+                  <input type='hidden' id='benchmark_cols'>
+                </div>
+              </div>
+
+              <!-- Trend Model Group -->
+              <div class="border-t border-gray-700 pt-3 mt-3 space-y-3">
+                <label class="toggle-wrapper text-sm text-gray-200">
+                  <input type='checkbox' id='use_trend_model' class="toggle-input hidden" />
+                  <span class="toggle-track">
+                    <span class="toggle-thumb"></span>
+                  </span>
+                  <span>Use Trend Model</span>
+                </label>
+                <div id="trend-model-fields" class="space-y-3 transition-opacity duration-200">
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label>Model Type</label>
+                      <select id='model_type'>
+                        <option value='kmeans'>kmeans</option>
+                        <option value='autoencoder'>autoencoder</option>
+                        <option value='hmm'>hmm</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label>Lookback Days</label>
+                      <input type='number' id='model_lookback_days' value='60'>
+                    </div>
+                  </div>
+                  <div>
+                    <label>Trend Threshold [0,1]</label>
+                    <input type='number' id='model_threshold' value='0.5' step='0.05' min='0' max='1'>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div>
-              <label>Engine</label>
-              <select id='asset_engine'>
-                <option value=''>None</option>
-                <option value='bond'>bond</option>
-                <option value='cash'>cash</option>
-              </select>
-            </div>
-            <div><label>Initial Start Date</label><input type='date' id='asset_initial_start_date' value='1985-01-02'></div>
-            <div><label>Duration (for bond)</label><input type='number' step='0.1' id='asset_duration' placeholder="20.0"></div>
-            <div class="col-span-2 flex gap-2 pt-2">
-              <button type='submit' id='save-asset-btn' class="flex-1">Save Asset</button>
-              <button type='button' id='new-asset-btn' class="flex-1 bg-gray-700">Clear Form</button>
+
+            <div class="pt-4 mt-auto">
+              <button type='submit' id='run-btn' class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded transition-colors">Run Backtest</button>
+              <div id='error-msg' class='error'></div>
             </div>
           </form>
         </div>
 
-        <!-- Backtest Execution View -->
+        <!-- RIGHT: Assets Management -->
+        <div class='panel'>
+          <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Assets Management</h2>
+          <div class="flex gap-2 mb-4 items-center">
+            <button type='button' id='refresh-assets-btn' class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm transition-colors">Refresh List</button>
+            <button type='button' id='download-assets-btn' class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded text-sm transition-colors">Download Data</button>
+            <button type='button' id='process-assets-btn' class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-sm transition-colors">Process Data</button>
+            <label class="flex items-center gap-1 text-xs text-gray-400 ml-auto">
+              <input type='checkbox' id='select-all-assets'>
+              <span>Select All</span>
+            </label>
+          </div>
+          
+          <!-- Fixed height table container -->
+          <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
+            <div class="overflow-y-auto border border-gray-800 rounded mb-4" style="max-height: 360px;">
+              <table id='assets-table'>
+                <thead>
+                  <tr>
+                    <th style="width:32px; text-align:center;">Sel</th>
+                    <th>Name</th>
+                    <th>Ticker</th>
+                    <th>Kind</th>
+                    <th>Engine</th>
+                    <th>Data Start</th>
+                    <th>Data End</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <div class="mt-auto pt-4 border-t border-gray-800">
+              <h3 class="text-sm font-bold mb-3 text-blue-400">Add / Edit Asset</h3>
+              <form id='asset-form' class="grid grid-cols-2 gap-3">
+                <input type='hidden' id='asset_original_name'>
+                <div><label>Name</label><input type='text' id='asset_name'></div>
+                <div><label>Ticker</label><input type='text' id='asset_ticker'></div>
+                <div>
+                  <label>Kind</label>
+                  <select id='asset_kind'>
+                    <option value='price'>price</option>
+                    <option value='yield'>yield</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Engine</label>
+                  <select id='asset_engine'>
+                    <option value=''>None</option>
+                    <option value='bond'>bond</option>
+                    <option value='cash'>cash</option>
+                  </select>
+                </div>
+                <div><label>Initial Start Date</label><input type='date' id='asset_initial_start_date' value='1985-01-02'></div>
+                <div><label>Duration (for bond)</label><input type='number' step='0.1' id='asset_duration' placeholder="20.0"></div>
+                <div class="col-span-2 flex gap-2 pt-2">
+                  <button type='submit' id='save-asset-btn' class="flex-1 bg-green-700 hover:bg-green-600 text-white font-bold py-2 rounded transition-colors text-sm">Save Asset</button>
+                  <button type='button' id='new-asset-btn' class="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 rounded transition-colors text-sm">Clear Form</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BOTTOM: Results -->
+      <div class='bottom-layout'>
         <div id='loading' class='panel hidden text-center py-12'>
           <div class="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500 mb-4"></div>
           <div>Processing backtest simulation, please wait...</div>
@@ -170,6 +252,10 @@
   </div>
 
   <script>
+    let lastSavedAssetName = null;
+    let allAssetsList = [];
+    const STORAGE_KEY = 'backtest_asset_selection_v1';
+
     async function loadAlgorithms() {
       try {
         const res = await fetch('/api/algorithms');
@@ -185,15 +271,116 @@
       } catch (e) { console.error('Failed to load algorithms', e); }
     }
 
+    function createAssetChip(name, type = 'pool') {
+      const chip = document.createElement('div');
+      chip.className = 'asset-chip';
+      chip.textContent = name;
+      chip.draggable = true;
+      chip.dataset.name = name;
+      
+      if (type !== 'pool') {
+        const removeBtn = document.createElement('span');
+        removeBtn.className = 'remove-btn';
+        removeBtn.textContent = '×';
+        removeBtn.onclick = (e) => {
+          e.stopPropagation();
+          chip.remove();
+          updateHiddenInputs();
+        };
+        chip.appendChild(removeBtn);
+      }
+
+      chip.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', name);
+        e.dataTransfer.effectAllowed = 'copyMove';
+      };
+
+      return chip;
+    }
+
+    function updateAssetPool() {
+      const pool = document.getElementById('asset-pool');
+      pool.innerHTML = '';
+      allAssetsList.forEach(asset => {
+        pool.appendChild(createAssetChip(asset.name, 'pool'));
+      });
+    }
+
+    function updateHiddenInputs() {
+      const stratChips = Array.from(document.querySelectorAll('#strategy-dropzone .asset-chip'));
+      document.getElementById('asset_cols').value = stratChips.map(c => c.dataset.name).join(',');
+
+      const benchChips = Array.from(document.querySelectorAll('#benchmark-dropzone .asset-chip'));
+      document.getElementById('benchmark_cols').value = benchChips.map(c => c.dataset.name).join(',');
+
+      const state = {
+        strategy: stratChips.map(c => c.dataset.name),
+        benchmarks: benchChips.map(c => c.dataset.name),
+      };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {
+        console.warn('Failed to persist asset selection', e);
+      }
+    }
+
+    function clearStrategyAndBenchmarks() {
+      if (!confirm('Clear all Strategy Assets and Benchmarks?')) return;
+      document.getElementById('strategy-dropzone').innerHTML = '';
+      document.getElementById('benchmark-dropzone').innerHTML = '';
+      updateHiddenInputs();
+    }
+
+    function updateTrendModelEnabled() {
+      const enabled = document.getElementById('use_trend_model').checked;
+      const fields = document.getElementById('trend-model-fields');
+      const inputs = fields.querySelectorAll('select, input');
+      inputs.forEach(el => el.disabled = !enabled);
+      fields.style.opacity = enabled ? '1' : '0.4';
+      fields.style.pointerEvents = enabled ? 'auto' : 'none';
+    }
+
+    // Setup Drag and Drop
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('.dropzone').forEach(zone => {
+        zone.ondragover = (e) => {
+          e.preventDefault();
+          zone.classList.add('drag-over');
+        };
+        zone.ondragleave = () => {
+          zone.classList.remove('drag-over');
+        };
+        zone.ondrop = (e) => {
+          e.preventDefault();
+          zone.classList.remove('drag-over');
+          const name = e.dataTransfer.getData('text/plain');
+          if (!name) return;
+          // Prevent duplicates in same zone
+          if (zone.querySelector(`[data-name="${name}"]`)) return;
+          const chip = createAssetChip(name, zone.dataset.type);
+          zone.appendChild(chip);
+          updateHiddenInputs();
+        };
+      });
+
+      document.getElementById('clear-selection-btn').onclick = clearStrategyAndBenchmarks;
+      document.getElementById('use_trend_model').onchange = updateTrendModelEnabled;
+      updateTrendModelEnabled();
+    });
+
     async function loadAssets() {
       try {
         const res = await fetch('/api/assets');
         const assets = await res.json();
+        allAssetsList = assets;
+        updateAssetPool();
+
         const tbody = document.querySelector('#assets-table tbody');
         tbody.innerHTML = '';
         assets.forEach(a => {
           const tr = document.createElement('tr');
           tr.innerHTML = `
+            <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}"></td>
             <td>${a.name}</td>
             <td>${a.ticker}</td>
             <td>${a.kind}</td>
@@ -205,6 +392,7 @@
               <button type='button' class='delete-asset bg-red-900 hover:bg-red-800 px-2 py-1 text-[10px]'>DEL</button>
             </td>
           `;
+
           tr.querySelector('.edit-asset').onclick = () => {
             document.getElementById('asset_original_name').value = a.name;
             document.getElementById('asset_name').value = a.name;
@@ -214,13 +402,47 @@
             document.getElementById('asset_duration').value = a.duration || '';
             document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
           };
+
           tr.querySelector('.delete-asset').onclick = async () => {
             if (!confirm(`Delete asset '${a.name}'?`)) return;
             const res = await fetch(`/api/assets/${encodeURIComponent(a.name)}`, { method: 'DELETE' });
             if (res.ok) loadAssets(); else alert('Delete failed');
           };
+
           tbody.appendChild(tr);
         });
+
+        if (lastSavedAssetName) {
+          const checkbox = document.querySelector(`.asset-select-checkbox[data-name="${lastSavedAssetName}"]`);
+          if (checkbox) checkbox.checked = true;
+        }
+
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const state = JSON.parse(saved);
+            const stratZone = document.getElementById('strategy-dropzone');
+            const benchZone = document.getElementById('benchmark-dropzone');
+
+            if (state.strategy && Array.isArray(state.strategy)) {
+              state.strategy.forEach(name => {
+                if (allAssetsList.find(a => a.name === name)) {
+                  stratZone.appendChild(createAssetChip(name, 'strategy'));
+                }
+              });
+            }
+            if (state.benchmarks && Array.isArray(state.benchmarks)) {
+              state.benchmarks.forEach(name => {
+                if (allAssetsList.find(a => a.name === name)) {
+                  benchZone.appendChild(createAssetChip(name, 'benchmark'));
+                }
+              });
+            }
+            updateHiddenInputs();
+          }
+        } catch (e) {
+          console.warn('Failed to restore asset selection from storage', e);
+        }
       } catch (e) { console.error('Failed to load assets', e); }
     }
 
@@ -248,7 +470,8 @@
       });
 
       if (res.ok) {
-        document.getElementById('asset_original_name').value = payload.name;
+        document.getElementById('asset_original_name').value = '';
+        lastSavedAssetName = payload.name;
         loadAssets();
       } else {
         const err = await res.json();
@@ -257,25 +480,65 @@
     }
 
     async function downloadAssets() {
-      if (!confirm('Start incremental data update for all assets?')) return;
+      const checkboxes = Array.from(document.querySelectorAll('.asset-select-checkbox'));
+      const selectedNames = checkboxes.filter(cb => cb.checked).map(cb => cb.getAttribute('data-name'));
+
+      if (selectedNames.length === 0) {
+        alert('Please select at least one asset to download.');
+        return;
+      }
+
+      if (!confirm('Start incremental data update for selected assets?')) return;
       const btn = document.getElementById('download-assets-btn');
       const originalText = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Updating...';
       
       try {
-        const res = await fetch('/api/assets/download', { method: 'POST' });
+        const res = await fetch('/api/assets/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ names: selectedNames }),
+        });
         const data = await res.json();
         if (res.status === 429) {
             alert(data.detail);
         } else if (!res.ok) {
             alert('Failed: ' + (data.detail || 'Unknown error'));
         } else {
-            alert('Success: Data updated and aligned.');
+            alert('Success: Data downloaded.');
             loadAssets();
         }
       } catch (e) { alert('Download trigger failed'); }
       finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    }
+
+    async function processAssets() {
+      if (!confirm('Start processing and aligning data for ALL configured assets?')) return;
+      const btn = document.getElementById('process-assets-btn');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Processing...';
+
+      try {
+        const res = await fetch('/api/assets/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert('Failed: ' + (data.detail || 'Unknown error'));
+        } else {
+          alert('Success: Data processed.');
+          loadAssets();
+        }
+      } catch (e) {
+        alert('Process trigger failed');
+      } finally {
         btn.disabled = false;
         btn.textContent = originalText;
       }
@@ -358,6 +621,7 @@
 
         plotFrame.src = data.result_url + '?t=' + new Date().getTime();
         resultsPanel.classList.remove('hidden');
+        resultsPanel.scrollIntoView({ behavior: 'smooth' });
       } catch (err) {
         errorMsg.textContent = err.message;
         errorMsg.style.display = 'block';
@@ -367,9 +631,18 @@
       }
     }
 
+    document.addEventListener('change', (e) => {
+      if (e.target && e.target.id === 'select-all-assets') {
+        const checked = e.target.checked;
+        const checkboxes = document.querySelectorAll('.asset-select-checkbox');
+        checkboxes.forEach(cb => { cb.checked = checked; });
+      }
+    });
+
     document.getElementById('backtest-form').onsubmit = runBacktest;
     document.getElementById('refresh-assets-btn').onclick = loadAssets;
     document.getElementById('download-assets-btn').onclick = downloadAssets;
+    document.getElementById('process-assets-btn').onclick = processAssets;
     document.getElementById('asset-form').onsubmit = saveAsset;
     document.getElementById('new-asset-btn').onclick = () => {
       document.getElementById('asset_original_name').value = '';
@@ -386,4 +659,3 @@
   </script>
 </body>
 </html>
-

@@ -11,7 +11,7 @@ if project_root not in sys.path:
 
 from strategies.backtest_engine import BacktestEngine
 from strategies.algorithms import RebalanceAlgorithms
-
+from utils.naming import sanitize_filename
 
 class BacktestConfig(BaseModel):
     """Configuration model for backtest execution."""
@@ -34,7 +34,8 @@ class BacktestConfig(BaseModel):
         description="Benchmark columns for comparison",
     )
     rebalance_interval_days: Optional[int] = Field(
-        None, description="Fixed interval in days for rebalancing",
+        None,
+        description="Fixed interval in days for rebalancing",
     )
     algorithm: str = Field(
         default="permanent_portfolio_rebalance",
@@ -47,7 +48,6 @@ class BacktestConfig(BaseModel):
             "if None, all columns in the data file will be used"
         ),
     )
-    # Trend model-related configuration
     use_trend_model: bool = Field(
         default=False,
         description="Whether to enable the unsupervised trend model to gate rebalancing",
@@ -100,14 +100,39 @@ class BacktestService:
         """Resolve a relative path against the project root."""
         return os.path.join(project_root, path)
 
+    def _build_aligned_filename_from_asset_cols(self, asset_cols: Optional[List[str]]) -> str:
+        """Build aligned CSV filename based on strategy asset universe.
+
+        If asset_cols is None or empty, fall back to the default global file.
+        """
+        if not asset_cols:
+            return "data_processed/aligned_assets.csv"
+
+        names_sorted = sorted(asset_cols)
+        key = "_".join(names_sorted)
+        safe_key = sanitize_filename(key)
+        return os.path.join("data_processed", f"aligned_{safe_key}.csv")
+
     def run_job(self, cfg: BacktestConfig) -> BacktestResult:
         """Run a complete backtest simulation job."""
-        data_file_abs = self._resolve_path(cfg.data_file)
-        output_dir_abs = self._resolve_path(cfg.output_dir)
+        # 1) 优先使用全局对齐文件 data_processed/aligned_assets.csv，
+        #    其中可能包含比本次策略资产更多的列，供 Benchmarks 使用。
+        global_rel = cfg.data_file or "data_processed/aligned_assets.csv"
+        global_abs = self._resolve_path(global_rel)
+
+        data_file_abs: str
+        if os.path.exists(global_abs):
+            data_file_abs = global_abs
+        else:
+            # 2) 如果找不到全局文件，则退回到按资产集合推导专属对齐文件的旧逻辑
+            data_file_rel = self._build_aligned_filename_from_asset_cols(cfg.asset_cols)
+            data_file_abs = self._resolve_path(data_file_rel)
 
         if not os.path.exists(data_file_abs):
-            raise FileNotFoundError(f"Data file not found: {cfg.data_file}")
+            # 如果既没有全局文件也没有资产集合专属文件，提示用户先执行下载与处理
+            raise FileNotFoundError("请先执行 Download & Process 生成 aligned_assets.csv 或该资产集合的对齐文件")
 
+        output_dir_abs = self._resolve_path(cfg.output_dir)
         os.makedirs(output_dir_abs, exist_ok=True)
 
         algo_info = self.algorithm_map.get(cfg.algorithm)
@@ -116,7 +141,6 @@ class BacktestService:
 
         rebalance_fn = algo_info["fn"]
 
-        # Initialize core engine and run simulation
         strategy = BacktestEngine(data_file_abs, cfg.initial_capital)
         strategy.run_backtest(
             start_date=cfg.start_date,
@@ -132,7 +156,6 @@ class BacktestService:
             model_type=cfg.model_type,
         )
 
-        # Gather results
         stats = strategy.get_performance_stats()
         if not stats:
             raise RuntimeError("Backtest simulation produced no statistics.")
@@ -144,7 +167,6 @@ class BacktestService:
         if not html_path:
             raise RuntimeError("Failed to generate performance chart.")
 
-        # Prepare paths for response
         rel_html_path = os.path.relpath(html_path, project_root)
         result_url = f"/results/{os.path.basename(html_path)}"
 

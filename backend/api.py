@@ -17,21 +17,16 @@ from backend.service import BacktestConfig, BacktestResult, BacktestService
 from backend.assets_config import AssetConfigManager
 from data_loader.yahoo_downloader import YahooIncrementalLoader
 from data_loader.data_processor import DataProcessor
+from utils.naming import sanitize_filename
 
 app = FastAPI(title="Backtest API", version="1.0.0")
 
 
 class AssetModels:
-    """Namespace for Asset-related Pydantic models."""
-
     class AssetConfig(BaseModel):
-        """Configuration model for a single asset entry."""
-
         name: str = Field(..., description="Logical name of the asset")
         ticker: str = Field(..., description="Yahoo Finance ticker symbol")
-        kind: str = Field(
-            ..., description="Asset data type: 'price' or 'yield'"
-        )
+        kind: str = Field(..., description="Asset data type: 'price' or 'yield'")
         engine: Optional[str] = Field(
             None, description="Pricing engine for yields: 'bond' or 'cash'"
         )
@@ -43,8 +38,6 @@ class AssetModels:
         )
 
     class AssetWithMeta(AssetConfig):
-        """Asset configuration extended with local data metadata."""
-
         data_start_date: Optional[str] = Field(
             None, description="Earliest date in local CSV file"
         )
@@ -54,8 +47,6 @@ class AssetModels:
 
 
 class APIManager:
-    """Manager class responsible for handling high-level API logic and coordinating services."""
-
     def __init__(self) -> None:
         self.service = BacktestService()
         self.last_download_ts: float = 0.0
@@ -63,7 +54,6 @@ class APIManager:
         self._ui_html: Optional[str] = None
 
     def get_ui_html(self) -> str:
-        """Return the static HTML for the web dashboard, loaded from backend/ui.html."""
         if self._ui_html is None:
             ui_path = os.path.join(project_root, "backend", "ui.html")
             with open(ui_path, "r", encoding="utf-8") as f:
@@ -71,25 +61,21 @@ class APIManager:
         return self._ui_html
 
 
-# Application instance management
 manager = APIManager()
 
 
 @app.get("/", response_class=HTMLResponse)
 def root_endpoint() -> str:
-    """Entry point rendering the web dashboard."""
     return manager.get_ui_html()
 
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui_endpoint() -> str:
-    """Alternative route for the interactive dashboard."""
     return manager.get_ui_html()
 
 
 @app.get("/api/algorithms")
 def list_algorithms() -> List[Dict[str, str]]:
-    """Return a list of all available rebalancing algorithms."""
     return [
         {"key": k, "label": v["label"], "description": v["description"]}
         for k, v in manager.service.algorithm_map.items()
@@ -98,13 +84,12 @@ def list_algorithms() -> List[Dict[str, str]]:
 
 @app.get("/api/assets", response_model=List[AssetModels.AssetWithMeta])
 def get_assets() -> List[AssetModels.AssetWithMeta]:
-    """Retrieve all configured assets with their current data availability ranges."""
     assets = AssetConfigManager.load_assets()
     results: List[AssetModels.AssetWithMeta] = []
     data_dir = os.path.join(project_root, "data")
 
     for asset in assets:
-        safe_name = YahooIncrementalLoader.sanitize_filename(asset["name"])
+        safe_name = sanitize_filename(asset["name"])
         csv_path = os.path.join(data_dir, f"{safe_name}.csv")
         d_start, d_end = None, None
         if os.path.exists(csv_path):
@@ -126,7 +111,6 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
 
 @app.post("/api/assets", response_model=AssetModels.AssetWithMeta)
 def create_asset(asset: AssetModels.AssetConfig) -> AssetModels.AssetWithMeta:
-    """Add a new asset configuration to the system."""
     assets = AssetConfigManager.load_assets()
     if any(a["name"] == asset.name for a in assets):
         raise HTTPException(
@@ -139,7 +123,6 @@ def create_asset(asset: AssetModels.AssetConfig) -> AssetModels.AssetWithMeta:
 
 @app.put("/api/assets/{name}", response_model=AssetModels.AssetWithMeta)
 def update_asset(name: str, asset: AssetModels.AssetConfig) -> AssetModels.AssetWithMeta:
-    """Update an existing asset configuration, supporting name changes."""
     assets = AssetConfigManager.load_assets()
     if asset.name != name and any(a["name"] == asset.name for a in assets):
         raise HTTPException(
@@ -156,7 +139,6 @@ def update_asset(name: str, asset: AssetModels.AssetConfig) -> AssetModels.Asset
 
 @app.delete("/api/assets/{name}")
 def delete_asset(name: str) -> Dict[str, str]:
-    """Permanently remove an asset configuration."""
     assets = AssetConfigManager.load_assets()
     new_assets = [a for a in assets if a["name"] != name]
     if len(new_assets) == len(assets):
@@ -165,9 +147,22 @@ def delete_asset(name: str) -> Dict[str, str]:
     return {"detail": f"Asset '{name}' deleted."}
 
 
+class DownloadRequest(BaseModel):
+    names: Optional[List[str]] = Field(
+        None,
+        description="Optional list of asset names to download; if omitted, all assets are processed.",
+    )
+
+
+def _build_aligned_filename_from_assets(assets: List[Dict[str, Any]]) -> str:
+    names_sorted = sorted(a["name"] for a in assets)
+    key = "_".join(names_sorted)
+    safe_key = sanitize_filename(key)
+    return f"aligned_{safe_key}.csv"
+
+
 @app.post("/api/assets/download")
-def download_assets_endpoint() -> Dict[str, str]:
-    """Trigger incremental data updates for all assets with a safety cooldown."""
+def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
     now = time.time()
     if now - manager.last_download_ts < manager.download_cooldown:
         remaining = int(manager.download_cooldown - (now - manager.last_download_ts))
@@ -182,6 +177,17 @@ def download_assets_endpoint() -> Dict[str, str]:
             status_code=400, detail="No assets configured for download."
         )
 
+    if req.names:
+        selected = [a for a in assets if a["name"] in req.names]
+        if not selected:
+            raise HTTPException(
+                status_code=400,
+                detail="No matching assets found for the provided names.",
+            )
+        assets = selected
+    else:
+        raise HTTPException(status_code=400, detail="请先勾选资产")
+
     try:
         from logger import logger
 
@@ -190,23 +196,44 @@ def download_assets_endpoint() -> Dict[str, str]:
             storage_path=os.path.join(project_root, "data")
         )
         downloader.download_batch(assets, start_year=1985)
+        manager.last_download_ts = time.time()
+        return {"detail": "Batch download complete."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"System error: {str(e)}")
 
+
+@app.post("/api/assets/process")
+def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
+    """Process and align data for **all** configured assets.
+
+    点击 UI 的 "Process Data" 时，不再依赖勾选状态，始终根据
+    config/assets.json 中的全部资产重建全局对齐文件 aligned_assets.csv。
+    """
+    assets = AssetConfigManager.load_assets()
+    if not assets:
+        raise HTTPException(
+            status_code=400, detail="No assets configured for processing."
+        )
+
+    try:
         processor = DataProcessor(
             raw_path=os.path.join(project_root, "data"),
             processed_path=os.path.join(project_root, "data_processed"),
         )
-        processor.process_and_align(assets)
-        manager.last_download_ts = time.time()
-        return {"detail": "Batch update and alignment complete."}
+        full_path = processor.process_and_align(assets, output_filename="aligned_assets.csv")
+
+        return {
+            "detail": "Alignment complete.",
+            "aligned_filename": os.path.basename(full_path),
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"System error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"System error: {str(e)}")
 
 
 @app.post("/api/backtest", response_model=BacktestResult)
 def backtest_endpoint(req: BacktestConfig) -> BacktestResult:
-    """Execute a backtest synchronously based on the provided configuration."""
     try:
         return manager.service.run_job(req)
     except FileNotFoundError as e:
@@ -219,7 +246,6 @@ def backtest_endpoint(req: BacktestConfig) -> BacktestResult:
         )
 
 
-# Mount data directory for static chart serving
 results_dir = os.path.join(project_root, "data_processed")
 if os.path.exists(results_dir):
     app.mount("/results", StaticFiles(directory=results_dir), name="results")

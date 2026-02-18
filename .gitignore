@@ -66,3 +66,5 @@ data_processed/*
 strategies/*
 !strategies/algorithms_template.py
 !strategies/backtest_engine.py
+.cursorrules
+assets.json

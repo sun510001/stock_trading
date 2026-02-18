@@ -78,6 +78,19 @@ class BacktestEngine:
                 raise RuntimeError(f"Missing asset columns in data: {missing}")
             df_slice = df_slice[asset_cols]
 
+        # 在策略资产子集上做严格裁剪，丢弃含 NaN 的日期，
+        # 避免全局对齐矩阵中的短历史资产影响其它资产的可用区间。
+        before_rows = len(df_slice)
+        df_slice = df_slice.dropna(how="any")
+        after_rows = len(df_slice)
+        if df_slice.empty:
+            logger.error("No data left after dropping NaNs for selected assets!")
+            return
+        if after_rows < before_rows:
+            logger.info(
+                f"Dropped {before_rows - after_rows} rows with NaNs for selected strategy assets."
+            )
+
         actual_start = df_slice.index[0].strftime("%Y-%m-%d")
         actual_end = df_slice.index[-1].strftime("%Y-%m-%d")
         logger.info(
@@ -129,7 +142,7 @@ class BacktestEngine:
                     window_arr = window.values.astype(float)
                     model = get_trend_model(model_type=model_type)
 
-                    # Global trend score used to decide whether to allow rebalancing at this index
+                    # Global trend score used to decide whether to allow rebalance at this index
                     trend_score = float(model.predict_score(window_arr))
                     trend_score = max(0.0, min(1.0, trend_score))
                     logger.info(
@@ -272,10 +285,9 @@ class BacktestEngine:
                 y=strategy_norm,
                 mode="lines",
                 name=(
-                    f"Strategy | Total: {strat_total_ret:.1%}, "
-                    f"CAGR: {strat_cagr:.1%}, "
-                    f"Sharpe: {strat_sharpe:.2f}, "
-                    f"MaxDD: {strat_max_dd:.1%}"
+                    "Strategy<br>"
+                    f"Total: {strat_total_ret:.1%}, CAGR: {strat_cagr:.1%}<br>"
+                    f"Sharpe: {strat_sharpe:.2f}, MaxDD: {strat_max_dd:.1%}"
                 ),
                 line=dict(color="#00CC96", width=2),
             ),
@@ -321,10 +333,9 @@ class BacktestEngine:
                             y=bench_norm,
                             mode="lines",
                             name=(
-                                f"Benchmark ({col}) | Total: {bench_total_ret:.1%}, "
-                                f"CAGR: {cagr:.1%}, "
-                                f"Sharpe: {sharpe:.2f}, "
-                                f"MaxDD: {max_dd:.1%}"
+                                f"Benchmark ({col})<br>"
+                                f"Total: {bench_total_ret:.1%}, CAGR: {cagr:.1%}<br>"
+                                f"Sharpe: {sharpe:.2f}, MaxDD: {max_dd:.1%}"
                             ),
                             line=dict(color=color, width=1, dash="dot"),
                         ),
@@ -360,17 +371,18 @@ class BacktestEngine:
         )
 
         fig.update_layout(
-            title= (
+            title=(
                 f"Strategy & Benchmarks with Weights | "
                 f"{start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
             ),
             template="plotly_dark",
             hovermode="x unified",
             legend=dict(
+                orientation="v",
                 yanchor="top",
-                y=0.99,
+                y=1.0,
                 xanchor="left",
-                x=0.01,
+                x=1.02,
                 bgcolor="rgba(0,0,0,0.5)",
             ),
         )
