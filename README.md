@@ -1,5 +1,10 @@
 # Updates
 
+- **2026-02-18**
+  - Refactored the data loading and processing pipeline into clearer stages: incremental raw data download (per selected asset) and full-portfolio processing/alignment driven by configuration.
+  - Introduced the `DataProcessor` class to centralize yield-to-price engines (bond/cash) and build a flexible multi-asset price matrix that only drops fully-empty dates, deferring final "barrel effect" trimming to the backtest layer.
+  - Updated the FastAPI endpoints: `POST /api/assets/download` now strictly works on user-selected assets, while `POST /api/assets/process` always rebuilds `aligned_assets.csv` from all assets defined in `config/assets.json`, independent of UI selection.
+
 - **2026-02-17**
   - Added UI controls for configuring an unsupervised trend model (model type, fixed lookback window, threshold) and wiring it through the backtest engine.
   - Introduced a new `signal_weighted_rebalance` algorithm option that tilts portfolio weights based on per-asset trend signals (implementation details remain private).
@@ -26,16 +31,17 @@ project_root/
 │
 ├── data/                # Raw asset data (CSV files named using sanitized asset names)
 ├── data_processed/
-│   ├── aligned_assets.csv              # Synchronized price matrix for backtesting
+│   ├── aligned_assets.csv              # Global aligned price matrix (built from all configured assets)
 │   └── backtest_results_*.html         # Interactive Plotly charts generated from backtest runs
 │
 ├── data_loader/
-│   ├── yahoo_downloader.py  # Incremental OHLCV data downloader using yfinance
-│   └── data_processor.py    # Yield-to-price conversion and multi-asset alignment
+│   ├── yahoo_downloader.py    # Incremental OHLCV downloader using yfinance
+│   ├── akshare_downloader.py  # Incremental OHLCV downloader using akshare
+│   └── data_processor.py      # Yield-to-price conversion and multi-asset alignment
 │
 ├── strategies/
 │   ├── backtest_engine.py      # Core simulation engine (Time loop + algorithm execution)
-|   └── algorithms_template.py  # A template for algorithms.py
+│   └── algorithms_template.py  # A template for algorithms.py
 │
 ├── utils/
 │   ├── decorators.py        # Generic decorators (e.g., @retry)
@@ -65,8 +71,11 @@ project_root/
 - **REST Endpoints**:
   - `GET /api/algorithms`: Lists available rebalancing strategies.
   - `GET /api/assets`: Retrieves configured assets and their local data availability.
-  - `POST /api/assets`: Manages asset configurations.
-  - `POST /api/assets/download`: Triggers data updates with a 1-minute rate limit.
+  - `POST /api/assets`: Creates an asset configuration.
+  - `PUT /api/assets/{name}`: Updates an asset configuration.
+  - `DELETE /api/assets/{name}`: Deletes an asset configuration.
+  - `POST /api/assets/download`: Incrementally downloads raw CSV data for selected assets (60s cooldown).
+  - `POST /api/assets/process`: Processes and aligns data for all configured assets into `data_processed/aligned_assets.csv`.
   - `POST /api/backtest`: Executes backtest simulations synchronously.
 
 ---
@@ -74,26 +83,19 @@ project_root/
 ### 2. `data_loader/`: ETL Pipeline
 
 #### `data_loader/yahoo_downloader.py` (YahooIncrementalLoader Class)
-- **Incremental Sync**: Only downloads missing data based on local CSV history.
-- **Data Sanitization**: Standardizes yfinance output into consistent OHLCV formats.
-- **File Safety**: Sanitizes asset names for cross-platform filesystem compatibility.
+- **Incremental Sync**: Each asset is stored as `data/<sanitized_name>.csv`. The downloader reads local history and only requests the missing date range from Yahoo Finance.
+- **Column Normalization**: Standardizes yfinance output into consistent OHLCV columns (`Open`, `High`, `Low`, `Close`, `Volume`) and fills common gaps (e.g., zero/NaN OHLC using `Close`).
+- **Batch Mode**: `download_batch(assets, start_year=1985)` respects per-asset `initial_start_date` when provided, otherwise falls back to `start_year`.
 
 #### `data_loader/data_processor.py` (DataProcessor Class)
-- **Financial Engineering**: Includes engines to convert Treasury yields into synthetic total return price series (Bond and Cash engines).
-- **Temporal Alignment**: Performs inner joins across multiple assets to ensure a synchronized timeline for backtesting.
-
----
-
-### 3. `strategies/`: Core Engine and Algorithms
-
-#### `strategies/algorithms.py` (RebalanceAlgorithms Class)
-- **Static Strategies**: Contains pure mathematical implementations of rebalancing logic.
-- **Pluggability**: Methods follow a strict signature allowing them to be swapped dynamically by the engine.
-
-#### `strategies/backtest_engine.py` (BacktestEngine Class)
-- **Vectorized Calculations**: Uses NumPy for high-performance portfolio value tracking.
-- **Simulation Logic**: Handles initial capital allocation, transaction fees, and rebalancing triggers (Calendar frequency or fixed day intervals).
-- **Visualization**: Generates standalone Plotly HTML charts with normalized performance comparisons.
+- **Yield-to-Price Engines**:
+  - `bond_pricing_engine`: Converts yield series into a synthetic total return price series (duration-based approximation).
+  - `cash_pricing_engine`: Converts short-rate yields into a cash-like cumulative return series.
+- **Alignment Strategy**:
+  - Builds a multi-asset price matrix in-memory.
+  - Drops only dates where *all* assets are missing (`dropna(how="all")`), preserving partial-missing dates.
+  - Final date-range trimming for a specific backtest run is deferred to the backtest layer based on the selected asset subset.
+- **Persistence**: `process_and_align(...)` writes the aligned matrix to `data_processed/aligned_assets.csv`.
 
 ---
 
@@ -118,12 +120,21 @@ pip install -r requirements.txt
 
 ### 1. Data Setup
 
-1. Define assets in `config/assets.json` or via the Web UI.
-2. Run data synchronization:
+1. Configure assets via Web UI (**Assets Management**) or by editing `config/assets.json`.
+2. Download / update raw data:
 
-   ```bash
-   python main_download.py
-   ```
+   - Via Web UI:
+     - Select assets in the Assets table and click **Download Data** (calls `POST /api/assets/download`).
+   - Via CLI:
+
+     ```bash
+     python main_download.py
+     ```
+
+3. Process and align data:
+
+   - Via Web UI:
+     - Click **Process Data** to rebuild `data_processed/aligned_assets.csv` from all configured assets (calls `POST /api/assets/process`).
 
 ### 2. Running Simulations
 
@@ -146,12 +157,17 @@ python main_backtest.py
    ```
 
 2. Navigate to `http://127.0.0.1:8000/ui`.
-3. Configure parameters and click **Run Backtest**.
+3. (Optional) Download / process data.
+4. Configure parameters and click **Run Backtest**.
 
-![项目截图](./assets/ui.png)
+![ui](./assets/ui.png)
+
 ---
 
 ## FAQ
 
-- **Rate Limiting**: The Yahoo Finance downloader is subject to API rate limits. The system implements a 2-second cooldown on the download endpoint.
+- **Rate Limiting**: The Yahoo Finance downloader is subject to API rate limits. The system implements a 60-second cooldown on the download endpoint.
+- **Processing vs Selection**:
+  - `Download Data` operates on selected assets.
+  - `Process Data` always rebuilds `aligned_assets.csv` from *all* assets in `config/assets.json`.
 - **Adding Algorithms**: New strategies can be added as static methods ending in `_rebalance` within `strategies/algorithms.py`. They will be automatically detected by the system.
