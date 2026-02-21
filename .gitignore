@@ -68,3 +68,4 @@ strategies/*
 !strategies/trend_models_template.py
 !strategies/backtest_engine.py
 .cursorrules
+assets.json
