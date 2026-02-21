@@ -65,6 +65,6 @@ data/*
 data_processed/*
 strategies/*
 !strategies/algorithms_template.py
+!strategies/trend_models_template.py
 !strategies/backtest_engine.py
 .cursorrules
-assets.json

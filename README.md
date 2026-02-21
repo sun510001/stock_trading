@@ -41,6 +41,7 @@ project_root/
 │
 ├── strategies/
 │   ├── backtest_engine.py      # Core simulation engine (Time loop + algorithm execution)
+│   ├── trend_models_template.py  # A template for trend_models.py
 │   └── algorithms_template.py  # A template for algorithms.py
 │
 ├── utils/
@@ -140,6 +141,7 @@ pip install -r requirements.txt
 
 ```bash
 mv strategies/algorithms_template.py strategies/algorithms.py
+mv strategies/trend_models_template.py strategies/trend_models.py
 ```
 
 #### Via CLI
