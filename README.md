@@ -1,5 +1,18 @@
-# Updates
+# Stock Trading Backtest System
 
+A Python-based multi-asset backtesting system featuring automated data downloading, yield-to-price pricing engines, a core backtest engine with pluggable rebalancing algorithms, and an interactive FastAPI-based web console.
+
+The system is designed for backtesting long-term asset allocation strategies (e.g., Permanent Portfolio) with support for arbitrary asset configurations.
+
+---
+
+<details>
+<summary><strong>Updates</strong></summary>
+
+- **2026-02-22**
+  - Added a public template file for trend models so that users can more easily plug in their own models.
+  - Adjusted internal subproject references to point to the latest data/code snapshot.
+  - Cleaned up `.gitignore` rules so that `config/assets.json` is handled correctly and old file paths are no longer referenced.
 - **2026-02-18**
   - Refactored the data loading and processing pipeline into clearer stages: incremental raw data download (per selected asset) and full-portfolio processing/alignment driven by configuration.
   - Introduced the `DataProcessor` class to centralize yield-to-price engines (bond/cash) and build a flexible multi-asset price matrix that only drops fully-empty dates, deferring final "barrel effect" trimming to the backtest layer.
@@ -11,13 +24,7 @@
   - Enhanced the Performance Chart to display Total Return, CAGR, Sharpe Ratio, and Max Drawdown for both the strategy and all selected benchmarks.
   - Added a second subplot below the performance chart that shows the portfolio's asset weights over time as a stacked area plot.
 
----
-
-# Stock Trading Backtest System
-
-A Python-based multi-asset backtesting system featuring automated data downloading, yield-to-price pricing engines, a core backtest engine with pluggable rebalancing algorithms, and an interactive FastAPI-based web console.
-
-The system is designed for backtesting long-term asset allocation strategies (e.g., Permanent Portfolio) with support for arbitrary asset configurations.
+</details>
 
 ---
 
