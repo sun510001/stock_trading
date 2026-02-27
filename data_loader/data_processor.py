@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from logger import logger
 from data_loader.yahoo_downloader import YahooIncrementalLoader
 from utils.naming import sanitize_filename
@@ -121,7 +121,56 @@ class DataProcessor:
         )
         return portfolio_df
 
-    def process_and_align(self, assets: List[Dict[str, Any]], output_filename: str = "aligned_assets.csv") -> str:
+    def _maybe_add_term_spread(
+        self,
+        portfolio_df: pd.DataFrame,
+        selected_asset_names: Optional[Set[str]] = None,
+    ) -> pd.DataFrame:
+        """Add raw-yield TermSpread (= raw US30Y - raw US3M) when enabled.
+
+        Rule:
+        - If selected_asset_names is provided, only add when both US30Y and US3M
+          are selected in Assets Management.
+        - If selected_asset_names is None, add whenever both columns exist in
+          the aligned matrix.
+
+        Important:
+        - TermSpread is always computed from raw input series loaded by `_load_raw`,
+          so it is independent of yield pricing engines (bond/cash).
+        """
+        required_cols = {"US30Y", "US3M"}
+        if not required_cols.issubset(set(portfolio_df.columns)):
+            logger.info("Skip TermSpread: missing US30Y or US3M in aligned matrix.")
+            return portfolio_df
+
+        if selected_asset_names is not None and not required_cols.issubset(
+            selected_asset_names
+        ):
+            logger.info(
+                "Skip TermSpread: US30Y and US3M are not both selected in Assets Management."
+            )
+            return portfolio_df
+
+        try:
+            us30y_raw = self._load_raw(sanitize_filename("US30Y"))
+            us3m_raw = self._load_raw(sanitize_filename("US3M"))
+        except FileNotFoundError as e:
+            logger.warning(f"Skip TermSpread: raw source file missing. {e}")
+            return portfolio_df
+
+        # Align raw yields to the final aligned matrix index.
+        us30y_aligned = us30y_raw.reindex(portfolio_df.index)
+        us3m_aligned = us3m_raw.reindex(portfolio_df.index)
+        portfolio_df["TermSpread"] = us30y_aligned - us3m_aligned
+        logger.info("Derived feature added: TermSpread = raw(US30Y) - raw(US3M)")
+        return portfolio_df
+
+    def process_and_align(
+        self,
+        assets: List[Dict[str, Any]],
+        output_filename: str = "aligned_assets.csv",
+        selected_asset_names: Optional[Set[str]] = None,
+    ) -> str:
         """Full ETL pipeline: build aligned DataFrame and persist to CSV.
 
         Args:
@@ -133,6 +182,10 @@ class DataProcessor:
         """
         try:
             portfolio_df = self.build_aligned_dataframe(assets)
+            portfolio_df = self._maybe_add_term_spread(
+                portfolio_df,
+                selected_asset_names=selected_asset_names,
+            )
             output_file = os.path.join(self.processed_path, output_filename)
             portfolio_df.to_csv(output_file)
             logger.info(f"Aligned assets saved successfully to: {output_file}")

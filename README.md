@@ -39,7 +39,8 @@ project_root/
 ├── data/                # Raw asset data (CSV files named using sanitized asset names)
 ├── data_processed/
 │   ├── aligned_assets.csv              # Global aligned price matrix (built from all configured assets)
-│   └── backtest_results_*.html         # Interactive Plotly charts generated from backtest runs
+│   ├── configs/                        # Saved backtest configuration YAML files
+│   └── backtest_results.html           # Interactive Plotly charts generated from backtest runs
 │
 ├── data_loader/
 │   ├── yahoo_downloader.py    # Incremental OHLCV downloader using yfinance

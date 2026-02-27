@@ -13,6 +13,7 @@ from strategies.backtest_engine import BacktestEngine
 from strategies.algorithms import RebalanceAlgorithms
 from utils.naming import sanitize_filename
 
+
 class BacktestConfig(BaseModel):
     """Configuration model for backtest execution."""
 
@@ -52,9 +53,13 @@ class BacktestConfig(BaseModel):
         default=False,
         description="Whether to enable the unsupervised trend model to gate rebalancing",
     )
-    model_type: str = Field(
-        default="kmeans",
-        description="Trend model type: 'kmeans', 'autoencoder', or 'hmm'",
+    trend_model_type: str = Field(
+        default="kmeans_simple",
+        description="Trend model type: 'kmeans_simple', 'kmeans_window', 'random_forest', 'torch_mlp', 'autoencoder', or 'hmm'",
+    )
+    model_path: Optional[str] = Field(
+        default=None,
+        description="Relative path to a persisted trend model (.pkl or .pt) under project root",
     )
     model_lookback_days: int = Field(
         default=60,
@@ -63,6 +68,53 @@ class BacktestConfig(BaseModel):
     model_threshold: float = Field(
         default=0.5,
         description="Trend score threshold in [0,1]; only rebalance when score >= threshold",
+    )
+    max_tilt: float = Field(
+        default=0.1,
+        description="Maximum weight tilt deviation from equal weight",
+    )
+    signal_weight_mode: str = Field(
+        default="raw_signal_tilt",
+        description=(
+            "Signal-weighted mode: 'raw_signal_tilt' or "
+            "'signal_tilt_with_risk_leverage'"
+        ),
+    )
+    risk_asset_cols: Optional[List[str]] = Field(
+        default=None,
+        description="Optional risk-asset bucket columns (must be subset of strategy assets)",
+    )
+    safe_asset_cols: Optional[List[str]] = Field(
+        default=None,
+        description="Optional safe-asset bucket columns (must be subset of strategy assets)",
+    )
+    safe_allocation_mode: str = Field(
+        default="equal_weight",
+        description="Safe-bucket allocation mode: 'equal_weight', 'fixed_weight', or 'single_asset'",
+    )
+    safe_fixed_weights: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Per-safe-asset weights when safe_allocation_mode='fixed_weight'",
+    )
+    safe_single_asset: Optional[str] = Field(
+        default=None,
+        description="Single safe asset name when safe_allocation_mode='single_asset'",
+    )
+    risk_leverage_min: float = Field(
+        default=0.2,
+        description="Minimum risk leverage when trend score is low",
+    )
+    risk_leverage_max: float = Field(
+        default=1.0,
+        description="Maximum risk leverage when trend score is high",
+    )
+    risk_leverage_score_lo: float = Field(
+        default=0.2,
+        description="Trend score lower bound mapped to risk_leverage_min",
+    )
+    risk_leverage_score_hi: float = Field(
+        default=0.8,
+        description="Trend score upper bound mapped to risk_leverage_max",
     )
 
 
@@ -142,6 +194,19 @@ class BacktestService:
         rebalance_fn = algo_info["fn"]
 
         strategy = BacktestEngine(data_file_abs, cfg.initial_capital)
+        if cfg.signal_weight_mode not in {
+            "raw_signal_tilt",
+            "signal_tilt_with_risk_leverage",
+        }:
+            raise RuntimeError(
+                "Unsupported signal_weight_mode. "
+                "Use 'raw_signal_tilt' or 'signal_tilt_with_risk_leverage'."
+            )
+
+        risk_leverage_enabled = (
+            cfg.algorithm == "signal_weighted_rebalance"
+            and cfg.signal_weight_mode == "signal_tilt_with_risk_leverage"
+        )
         strategy.run_backtest(
             start_date=cfg.start_date,
             end_date=cfg.end_date,
@@ -153,7 +218,19 @@ class BacktestService:
             use_trend_model=cfg.use_trend_model,
             model_lookback_days=cfg.model_lookback_days,
             model_threshold=cfg.model_threshold,
-            model_type=cfg.model_type,
+            model_type=cfg.trend_model_type,
+            model_path=cfg.model_path,
+            max_tilt=cfg.max_tilt,
+            risk_asset_cols=cfg.risk_asset_cols,
+            safe_asset_cols=cfg.safe_asset_cols,
+            safe_allocation_mode=cfg.safe_allocation_mode,
+            safe_fixed_weights=cfg.safe_fixed_weights,
+            safe_single_asset=cfg.safe_single_asset,
+            risk_leverage_enabled=risk_leverage_enabled,
+            risk_leverage_min=cfg.risk_leverage_min,
+            risk_leverage_max=cfg.risk_leverage_max,
+            risk_leverage_score_lo=cfg.risk_leverage_score_lo,
+            risk_leverage_score_hi=cfg.risk_leverage_score_hi,
         )
 
         stats = strategy.get_performance_stats()
@@ -166,6 +243,26 @@ class BacktestService:
         )
         if not html_path:
             raise RuntimeError("Failed to generate performance chart.")
+
+        # Save configuration to YAML
+        import yaml
+        from datetime import datetime
+        configs_dir = os.path.join(output_dir_abs, "configs")
+        os.makedirs(configs_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        algo_short = cfg.algorithm.replace("_rebalance", "")
+        model_info = f"_{cfg.trend_model_type}" if cfg.use_trend_model else ""
+        yaml_filename = f"config_{timestamp}_{algo_short}{model_info}.yaml"
+        yaml_path = os.path.join(configs_dir, yaml_filename)
+        
+        try:
+            cfg_dict = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
+            with open(yaml_path, "w", encoding="utf-8") as f:
+                yaml.dump(cfg_dict, f, allow_unicode=True, sort_keys=False)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to save config YAML: {e}")
 
         rel_html_path = os.path.relpath(html_path, project_root)
         result_url = f"/results/{os.path.basename(html_path)}"

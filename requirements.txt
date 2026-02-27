@@ -11,3 +11,4 @@ vectorbt==0.26.2
 numba==0.59.1
 ipykernel
 nbformat
+pyyaml

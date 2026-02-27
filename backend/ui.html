@@ -9,7 +9,7 @@
     body { background:#111; color:#eee; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin:0; padding:20px; }
     .panel { background:#1e1e1e; border:1px solid #333; border-radius:8px; padding:16px; margin-bottom:16px; }
     label { display:block; font-size:12px; color:#aaa; margin-bottom:4px; }
-    input, select { width:100%; padding:6px 8px; border-radius:4px; border:1px solid #444; background:#222; color:#eee; box-sizing:border-box; }
+    input, select, textarea { width:100%; padding:6px 8px; border-radius:4px; border:1px solid #444; background:#222; color:#eee; box-sizing:border-box; }
     button { padding:8px 12px; border:none; border-radius:4px; background:#0af; color:#111; font-weight:bold; cursor:pointer; }
     button:disabled { opacity:0.6; cursor:not-allowed; }
     .grid-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; }
@@ -86,6 +86,13 @@
                   <label>Algorithm</label>
                   <select id='algorithm' name='algorithm'></select>
                 </div>
+                <div class="col-span-2">
+                  <label>Signal Weighted Mode</label>
+                  <select id='signal_weight_mode'>
+                    <option value='raw_signal_tilt'>Raw Signal Tilt</option>
+                    <option value='signal_tilt_with_risk_leverage'>Signal Tilt + Risk Leverage</option>
+                  </select>
+                </div>
                 <div>
                   <label>Initial Capital</label>
                   <input type='number' id='initial_capital' value='100000'>
@@ -101,6 +108,10 @@
                 <div>
                   <label>End Date</label>
                   <input type='date' id='end_date' value='2026-01-01'>
+                </div>
+                <div>
+                  <label>Max Tilt (0.1 = 10%)</label>
+                  <input type='number' id='max_tilt' value='0.1' step='0.05' min='0' max='1'>
                 </div>
               </div>
 
@@ -123,6 +134,35 @@
                   <div id="benchmark-dropzone" class="dropzone" data-type="benchmark"></div>
                   <input type='hidden' id='benchmark_cols'>
                 </div>
+
+                <div>
+                  <label class="text-xs text-gray-400">Risk Assets (Optional)</label>
+                  <div id="risk-dropzone" class="dropzone" data-type="risk"></div>
+                  <input type='hidden' id='risk_asset_cols'>
+                </div>
+
+                <div>
+                  <label class="text-xs text-gray-400">Safe Assets (Optional)</label>
+                  <div id="safe-dropzone" class="dropzone" data-type="safe"></div>
+                  <input type='hidden' id='safe_asset_cols'>
+                </div>
+
+                <div class="col-span-2 space-y-2">
+                  <label class="text-xs text-gray-400">Safe Allocation Mode</label>
+                  <select id='safe_allocation_mode'>
+                    <option value='equal_weight'>Equal Weight</option>
+                    <option value='fixed_weight'>Fixed Weight</option>
+                    <option value='single_asset'>Single Asset</option>
+                  </select>
+                  <div id="safe-fixed-weights-wrap" class="hidden">
+                    <label class="text-[11px] text-gray-500">Fixed Weights (one per line, `Asset=Weight`)</label>
+                    <textarea id="safe_fixed_weights_text" rows="3" placeholder="SHY=0.7&#10;IEF=0.3"></textarea>
+                  </div>
+                  <div id="safe-single-asset-wrap" class="hidden">
+                    <label class="text-[11px] text-gray-500">Single Safe Asset</label>
+                    <select id='safe_single_asset'></select>
+                  </div>
+                </div>
               </div>
 
               <!-- Trend Model Group -->
@@ -139,7 +179,10 @@
                     <div>
                       <label>Model Type</label>
                       <select id='model_type'>
-                        <option value='kmeans'>kmeans</option>
+                        <option value='kmeans_simple'>kmeans_simple</option>
+                        <option value='kmeans_window'>kmeans_window</option>
+                        <option value='random_forest'>random_forest</option>
+                        <option value='torch_mlp'>torch_mlp</option>
                         <option value='autoencoder'>autoencoder</option>
                         <option value='hmm'>hmm</option>
                       </select>
@@ -149,9 +192,40 @@
                       <input type='number' id='model_lookback_days' value='60'>
                     </div>
                   </div>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label>Model File (.pkl)</label>
+                      <select id='model_path'>
+                        <option value=''>[none]</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label>Trend Threshold [0,1]</label>
+                      <input type='number' id='model_threshold' value='0.5' step='0.05' min='0' max='1'>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Risk Leverage Group -->
+              <div class="border-t border-gray-700 pt-3 mt-3 space-y-3">
+                <label class="text-sm font-semibold text-blue-400">Risk Leverage Params</label>
+                <div id="risk-leverage-fields" class="grid grid-cols-2 gap-3 transition-opacity duration-200">
                   <div>
-                    <label>Trend Threshold [0,1]</label>
-                    <input type='number' id='model_threshold' value='0.5' step='0.05' min='0' max='1'>
+                    <label>Leverage Min</label>
+                    <input type='number' id='risk_leverage_min' value='0.2' step='0.005' min='0' max='1'>
+                  </div>
+                  <div>
+                    <label>Leverage Max</label>
+                    <input type='number' id='risk_leverage_max' value='1.0' step='0.005' min='0' max='1'>
+                  </div>
+                  <div>
+                    <label>Score Lo</label>
+                    <input type='number' id='risk_leverage_score_lo' value='0.2' step='0.005' min='0' max='1'>
+                  </div>
+                  <div>
+                    <label>Score Hi</label>
+                    <input type='number' id='risk_leverage_score_hi' value='0.8' step='0.005' min='0' max='1'>
                   </div>
                 </div>
               </div>
@@ -179,7 +253,7 @@
           
           <!-- Fixed height table container -->
           <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
-            <div class="overflow-y-auto border border-gray-800 rounded mb-4" style="max-height: 360px;">
+            <div class="overflow-y-auto border border-gray-800 rounded mb-4 flex-1" style="max-height: none;">
               <table id='assets-table'>
                 <thead>
                   <tr>
@@ -271,6 +345,26 @@
       } catch (e) { console.error('Failed to load algorithms', e); }
     }
 
+    async function loadTrendModels() {
+      try {
+        const res = await fetch('/api/trend_models');
+        const models = await res.json();
+        const select = document.getElementById('model_path');
+        if (!select) return;
+
+        select.innerHTML = '';
+
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.key;
+          opt.textContent = m.label;
+          select.appendChild(opt);
+        });
+      } catch (e) {
+        console.error('Failed to load trend models', e);
+      }
+    }
+
     function createAssetChip(name, type = 'pool') {
       const chip = document.createElement('div');
       chip.className = 'asset-chip';
@@ -301,9 +395,19 @@
     function updateAssetPool() {
       const pool = document.getElementById('asset-pool');
       pool.innerHTML = '';
-      allAssetsList.forEach(asset => {
-        pool.appendChild(createAssetChip(asset.name, 'pool'));
-      });
+      // 只展示已 Process Data 进入 aligned_assets.csv 的资产，避免未处理资产被误用于回测/benchmarks
+      allAssetsList
+        .filter(asset => asset.processed)
+        .forEach(asset => {
+          pool.appendChild(createAssetChip(asset.name, 'pool'));
+        });
+
+      if (pool.children.length === 0) {
+        const hint = document.createElement('div');
+        hint.className = 'text-xs text-gray-500';
+        hint.textContent = 'No processed assets in Asset Pool. Please click "Process Data" in Assets Management.';
+        pool.appendChild(hint);
+      }
     }
 
     function updateHiddenInputs() {
@@ -313,9 +417,21 @@
       const benchChips = Array.from(document.querySelectorAll('#benchmark-dropzone .asset-chip'));
       document.getElementById('benchmark_cols').value = benchChips.map(c => c.dataset.name).join(',');
 
+      const riskChips = Array.from(document.querySelectorAll('#risk-dropzone .asset-chip'));
+      document.getElementById('risk_asset_cols').value = riskChips.map(c => c.dataset.name).join(',');
+
+      const safeChips = Array.from(document.querySelectorAll('#safe-dropzone .asset-chip'));
+      document.getElementById('safe_asset_cols').value = safeChips.map(c => c.dataset.name).join(',');
+      refreshSafeSingleAssetOptions();
+
       const state = {
         strategy: stratChips.map(c => c.dataset.name),
         benchmarks: benchChips.map(c => c.dataset.name),
+        riskAssets: riskChips.map(c => c.dataset.name),
+        safeAssets: safeChips.map(c => c.dataset.name),
+        safeAllocationMode: document.getElementById('safe_allocation_mode').value,
+        safeFixedWeightsText: document.getElementById('safe_fixed_weights_text').value,
+        safeSingleAsset: document.getElementById('safe_single_asset').value || '',
       };
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -325,9 +441,11 @@
     }
 
     function clearStrategyAndBenchmarks() {
-      if (!confirm('Clear all Strategy Assets and Benchmarks?')) return;
+      if (!confirm('Clear Strategy / Benchmarks / Risk / Safe selections?')) return;
       document.getElementById('strategy-dropzone').innerHTML = '';
       document.getElementById('benchmark-dropzone').innerHTML = '';
+      document.getElementById('risk-dropzone').innerHTML = '';
+      document.getElementById('safe-dropzone').innerHTML = '';
       updateHiddenInputs();
     }
 
@@ -338,6 +456,90 @@
       inputs.forEach(el => el.disabled = !enabled);
       fields.style.opacity = enabled ? '1' : '0.4';
       fields.style.pointerEvents = enabled ? 'auto' : 'none';
+    }
+
+    function updateModelPathEnabled() {
+      const modelType = document.getElementById('model_type').value;
+      const modelPathSelect = document.getElementById('model_path');
+      if (!modelPathSelect) return;
+
+      if (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp') {
+        modelPathSelect.disabled = false;
+      } else {
+        modelPathSelect.disabled = true;
+        modelPathSelect.value = '';
+      }
+    }
+
+    function updateRiskLeverageEnabled() {
+      const mode = document.getElementById('signal_weight_mode').value;
+      const enabled = mode === 'signal_tilt_with_risk_leverage';
+      const fields = document.getElementById('risk-leverage-fields');
+      const inputs = fields.querySelectorAll('input');
+      inputs.forEach(el => el.disabled = !enabled);
+      fields.style.opacity = enabled ? '1' : '0.4';
+      fields.style.pointerEvents = enabled ? 'auto' : 'none';
+    }
+
+    function refreshSafeSingleAssetOptions() {
+      const select = document.getElementById('safe_single_asset');
+      if (!select) return;
+      const prev = select.value;
+      const safeNames = Array.from(document.querySelectorAll('#safe-dropzone .asset-chip'))
+        .map(c => c.dataset.name)
+        .filter(Boolean);
+
+      select.innerHTML = '';
+      if (safeNames.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '[none]';
+        select.appendChild(opt);
+        select.value = '';
+        return;
+      }
+
+      safeNames.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      });
+      select.value = safeNames.includes(prev) ? prev : safeNames[0];
+    }
+
+    function updateSafeAllocationModeUI() {
+      const mode = document.getElementById('safe_allocation_mode').value;
+      const fixedWrap = document.getElementById('safe-fixed-weights-wrap');
+      const singleWrap = document.getElementById('safe-single-asset-wrap');
+      if (!fixedWrap || !singleWrap) return;
+      fixedWrap.classList.toggle('hidden', mode !== 'fixed_weight');
+      singleWrap.classList.toggle('hidden', mode !== 'single_asset');
+      refreshSafeSingleAssetOptions();
+    }
+
+    function parseSafeFixedWeights(text) {
+      const result = {};
+      const raw = (text || '').trim();
+      if (!raw) return result;
+
+      const parts = raw
+        .split(/\n|,/)
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      for (const part of parts) {
+        const pair = part.split(/=|:/).map(s => s.trim());
+        if (pair.length !== 2 || !pair[0] || !pair[1]) {
+          throw new Error(`Invalid fixed weight entry: "${part}". Use Asset=Weight`);
+        }
+        const value = parseFloat(pair[1]);
+        if (!Number.isFinite(value) || value < 0) {
+          throw new Error(`Invalid weight for "${pair[0]}": ${pair[1]}`);
+        }
+        result[pair[0]] = value;
+      }
+      return result;
     }
 
     // Setup Drag and Drop
@@ -357,6 +559,14 @@
           if (!name) return;
           // Prevent duplicates in same zone
           if (zone.querySelector(`[data-name="${name}"]`)) return;
+          // Risk/Safe are mutually exclusive: moving to one removes it from the other.
+          if (zone.dataset.type === 'risk') {
+            const existing = document.querySelector(`#safe-dropzone [data-name="${name}"]`);
+            if (existing) existing.remove();
+          } else if (zone.dataset.type === 'safe') {
+            const existing = document.querySelector(`#risk-dropzone [data-name="${name}"]`);
+            if (existing) existing.remove();
+          }
           const chip = createAssetChip(name, zone.dataset.type);
           zone.appendChild(chip);
           updateHiddenInputs();
@@ -364,8 +574,23 @@
       });
 
       document.getElementById('clear-selection-btn').onclick = clearStrategyAndBenchmarks;
-      document.getElementById('use_trend_model').onchange = updateTrendModelEnabled;
+      document.getElementById('use_trend_model').onchange = () => {
+        updateTrendModelEnabled();
+        updateModelPathEnabled();
+      };
+      document.getElementById('model_type').onchange = updateModelPathEnabled;
+      document.getElementById('signal_weight_mode').onchange = updateRiskLeverageEnabled;
+      document.getElementById('safe_allocation_mode').onchange = () => {
+        updateSafeAllocationModeUI();
+        updateHiddenInputs();
+      };
+      document.getElementById('safe_fixed_weights_text').oninput = updateHiddenInputs;
+      document.getElementById('safe_single_asset').onchange = updateHiddenInputs;
+
       updateTrendModelEnabled();
+      updateModelPathEnabled();
+      updateRiskLeverageEnabled();
+      updateSafeAllocationModeUI();
     });
 
     async function loadAssets() {
@@ -379,8 +604,9 @@
         tbody.innerHTML = '';
         assets.forEach(a => {
           const tr = document.createElement('tr');
+          const isDerived = !!a.derived;
           tr.innerHTML = `
-            <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}"></td>
+            <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}" ${isDerived ? 'disabled title="Derived asset: no raw download/process selection"' : ''}></td>
             <td>${a.name}</td>
             <td>${a.ticker}</td>
             <td>${a.kind}</td>
@@ -388,26 +614,30 @@
             <td>${a.data_start_date || '-'}</td>
             <td>${a.data_end_date || '-'}</td>
             <td class="flex gap-1">
-              <button type='button' class='edit-asset bg-gray-700 hover:bg-gray-600 px-2 py-1 text-[10px]'>EDIT</button>
-              <button type='button' class='delete-asset bg-red-900 hover:bg-red-800 px-2 py-1 text-[10px]'>DEL</button>
+              ${isDerived
+                ? "<span class='text-[10px] text-gray-400 px-2 py-1'>DERIVED</span>"
+                : "<button type='button' class='edit-asset bg-gray-700 hover:bg-gray-600 px-2 py-1 text-[10px]'>EDIT</button><button type='button' class='delete-asset bg-red-900 hover:bg-red-800 px-2 py-1 text-[10px]'>DEL</button>"
+              }
             </td>
           `;
 
-          tr.querySelector('.edit-asset').onclick = () => {
-            document.getElementById('asset_original_name').value = a.name;
-            document.getElementById('asset_name').value = a.name;
-            document.getElementById('asset_ticker').value = a.ticker;
-            document.getElementById('asset_kind').value = a.kind;
-            document.getElementById('asset_engine').value = a.engine || '';
-            document.getElementById('asset_duration').value = a.duration || '';
-            document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
-          };
+          if (!isDerived) {
+            tr.querySelector('.edit-asset').onclick = () => {
+              document.getElementById('asset_original_name').value = a.name;
+              document.getElementById('asset_name').value = a.name;
+              document.getElementById('asset_ticker').value = a.ticker;
+              document.getElementById('asset_kind').value = a.kind;
+              document.getElementById('asset_engine').value = a.engine || '';
+              document.getElementById('asset_duration').value = a.duration || '';
+              document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
+            };
 
-          tr.querySelector('.delete-asset').onclick = async () => {
-            if (!confirm(`Delete asset '${a.name}'?`)) return;
-            const res = await fetch(`/api/assets/${encodeURIComponent(a.name)}`, { method: 'DELETE' });
-            if (res.ok) loadAssets(); else alert('Delete failed');
-          };
+            tr.querySelector('.delete-asset').onclick = async () => {
+              if (!confirm(`Delete asset '${a.name}'?`)) return;
+              const res = await fetch(`/api/assets/${encodeURIComponent(a.name)}`, { method: 'DELETE' });
+              if (res.ok) loadAssets(); else alert('Delete failed');
+            };
+          }
 
           tbody.appendChild(tr);
         });
@@ -423,22 +653,68 @@
             const state = JSON.parse(saved);
             const stratZone = document.getElementById('strategy-dropzone');
             const benchZone = document.getElementById('benchmark-dropzone');
+            const riskZone = document.getElementById('risk-dropzone');
+            const safeZone = document.getElementById('safe-dropzone');
+            const safeModeSelect = document.getElementById('safe_allocation_mode');
+            const safeFixedWeightsText = document.getElementById('safe_fixed_weights_text');
+            const safeSingleAssetSelect = document.getElementById('safe_single_asset');
+
+            // 清空现有 chip，避免多次 loadAssets 叠加重复
+            stratZone.innerHTML = '';
+            benchZone.innerHTML = '';
+            riskZone.innerHTML = '';
+            safeZone.innerHTML = '';
 
             if (state.strategy && Array.isArray(state.strategy)) {
               state.strategy.forEach(name => {
                 if (allAssetsList.find(a => a.name === name)) {
-                  stratZone.appendChild(createAssetChip(name, 'strategy'));
+                  if (!stratZone.querySelector(`[data-name="${name}"]`)) {
+                    stratZone.appendChild(createAssetChip(name, 'strategy'));
+                  }
                 }
               });
             }
             if (state.benchmarks && Array.isArray(state.benchmarks)) {
               state.benchmarks.forEach(name => {
                 if (allAssetsList.find(a => a.name === name)) {
-                  benchZone.appendChild(createAssetChip(name, 'benchmark'));
+                  if (!benchZone.querySelector(`[data-name="${name}"]`)) {
+                    benchZone.appendChild(createAssetChip(name, 'benchmark'));
+                  }
                 }
               });
             }
+            if (state.riskAssets && Array.isArray(state.riskAssets)) {
+              state.riskAssets.forEach(name => {
+                if (allAssetsList.find(a => a.name === name)) {
+                  if (!riskZone.querySelector(`[data-name="${name}"]`)) {
+                    riskZone.appendChild(createAssetChip(name, 'risk'));
+                  }
+                }
+              });
+            }
+            if (state.safeAssets && Array.isArray(state.safeAssets)) {
+              state.safeAssets.forEach(name => {
+                if (allAssetsList.find(a => a.name === name)) {
+                  if (!safeZone.querySelector(`[data-name="${name}"]`)) {
+                    safeZone.appendChild(createAssetChip(name, 'safe'));
+                  }
+                }
+              });
+            }
+            if (safeModeSelect && state.safeAllocationMode) {
+              safeModeSelect.value = state.safeAllocationMode;
+            }
+            if (safeFixedWeightsText && typeof state.safeFixedWeightsText === 'string') {
+              safeFixedWeightsText.value = state.safeFixedWeightsText;
+            }
             updateHiddenInputs();
+            if (safeSingleAssetSelect && state.safeSingleAsset) {
+              const exists = Array.from(safeSingleAssetSelect.options).some(
+                opt => opt.value === state.safeSingleAsset
+              );
+              if (exists) safeSingleAssetSelect.value = state.safeSingleAsset;
+            }
+            updateSafeAllocationModeUI();
           }
         } catch (e) {
           console.warn('Failed to restore asset selection from storage', e);
@@ -517,7 +793,15 @@
     }
 
     async function processAssets() {
-      if (!confirm('Start processing and aligning data for ALL configured assets?')) return;
+      const checkboxes = Array.from(document.querySelectorAll('.asset-select-checkbox'));
+      const selectedNames = checkboxes.filter(cb => cb.checked).map(cb => cb.getAttribute('data-name'));
+
+      if (selectedNames.length === 0) {
+        alert('Please select at least one asset in Assets Management before Process Data.');
+        return;
+      }
+
+      if (!confirm('Start processing and aligning data? (Alignment uses all configured assets; selected assets control derived TermSpread generation)')) return;
       const btn = document.getElementById('process-assets-btn');
       const originalText = btn.textContent;
       btn.disabled = true;
@@ -527,7 +811,7 @@
         const res = await fetch('/api/assets/process', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ names: selectedNames }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -558,30 +842,140 @@
       runBtn.disabled = true;
       loading.classList.remove('hidden');
 
+      const useTrend = document.getElementById('use_trend_model').checked;
+      const modelType = document.getElementById('model_type').value;
+      const modelPathEl = document.getElementById('model_path');
+      const modelPathVal = modelPathEl && modelPathEl.value ? modelPathEl.value : '';
+
+      if (useTrend && (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp') && !modelPathVal) {
+        loading.classList.add('hidden');
+        runBtn.disabled = false;
+        errorMsg.textContent = 'Please select a Model File when using ' + modelType + '.';
+        errorMsg.style.display = 'block';
+        return;
+      }
+
+      const selectedAssetCols = document.getElementById('asset_cols').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      const selectedBenchmarkCols = document.getElementById('benchmark_cols').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      const strategySet = new Set(selectedAssetCols);
+      const selectedRiskCols = document.getElementById('risk_asset_cols').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .filter(name => strategySet.has(name));
+      const selectedSafeCols = document.getElementById('safe_asset_cols').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .filter(name => strategySet.has(name));
+      const safeAllocationMode = document.getElementById('safe_allocation_mode').value;
+
+      let safeFixedWeights = null;
+      if (safeAllocationMode === 'fixed_weight' && selectedSafeCols.length > 0) {
+        try {
+          const parsed = parseSafeFixedWeights(
+            document.getElementById('safe_fixed_weights_text').value
+          );
+          const safeSet = new Set(selectedSafeCols);
+          safeFixedWeights = Object.fromEntries(
+            Object.entries(parsed).filter(([name]) => safeSet.has(name))
+          );
+          const sumW = Object.values(safeFixedWeights).reduce((acc, v) => acc + v, 0);
+          if (sumW <= 0) {
+            throw new Error('Fixed weights must include at least one safe asset with weight > 0.');
+          }
+        } catch (err) {
+          loading.classList.add('hidden');
+          runBtn.disabled = false;
+          errorMsg.textContent = err.message || 'Invalid safe fixed weights';
+          errorMsg.style.display = 'block';
+          return;
+        }
+      }
+
+      let safeSingleAsset = null;
+      if (safeAllocationMode === 'single_asset' && selectedSafeCols.length > 0) {
+        const single = (document.getElementById('safe_single_asset').value || '').trim();
+        safeSingleAsset = selectedSafeCols.includes(single) ? single : selectedSafeCols[0];
+      }
+
+      const overlapRiskSafe = selectedRiskCols.filter(name => selectedSafeCols.includes(name));
+      if (overlapRiskSafe.length > 0) {
+        loading.classList.add('hidden');
+        runBtn.disabled = false;
+        errorMsg.textContent =
+          'Risk Assets and Safe Assets overlap: ' + overlapRiskSafe.join(', ') + '. Please separate them.';
+        errorMsg.style.display = 'block';
+        return;
+      }
+
+      // 校验：不允许选择未 Process Data 的资产参与回测/基准
+      const selectedAll = [...selectedAssetCols, ...selectedBenchmarkCols, ...selectedRiskCols, ...selectedSafeCols];
+      const notProcessed = selectedAll
+        .filter(n => n)
+        .filter((n, idx, arr) => arr.indexOf(n) === idx)
+        .filter(name => {
+          const a = allAssetsList.find(x => x.name === name);
+          return a && !a.processed;
+        });
+
+      if (notProcessed.length > 0) {
+        loading.classList.add('hidden');
+        runBtn.disabled = false;
+        errorMsg.textContent =
+          'Some selected assets are not processed yet: ' +
+          notProcessed.join(', ') +
+          '. Please click "Process Data" in Assets Management first.';
+        errorMsg.style.display = 'block';
+        return;
+      }
+
       const payload = {
         algorithm: document.getElementById('algorithm').value,
+        signal_weight_mode: document.getElementById('signal_weight_mode').value,
         start_date: document.getElementById('start_date').value || null,
         end_date: document.getElementById('end_date').value || null,
         initial_capital: parseFloat(document.getElementById('initial_capital').value),
-        asset_cols: document.getElementById('asset_cols').value
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean),
-        benchmark_cols: document.getElementById('benchmark_cols').value
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean),
+        asset_cols: selectedAssetCols,
+        risk_asset_cols: selectedRiskCols,
+        safe_asset_cols: selectedSafeCols,
+        safe_allocation_mode: safeAllocationMode,
+        safe_fixed_weights: safeFixedWeights,
+        safe_single_asset: safeSingleAsset,
+        benchmark_cols: selectedBenchmarkCols,
         rebalance_interval_days: document.getElementById('rebalance_interval_days').value
           ? parseInt(document.getElementById('rebalance_interval_days').value)
           : null,
-        use_trend_model: document.getElementById('use_trend_model').checked,
-        model_type: document.getElementById('model_type').value,
+        use_trend_model: useTrend,
+        model_type: modelType,
         model_lookback_days: document.getElementById('model_lookback_days').value
           ? parseInt(document.getElementById('model_lookback_days').value)
           : 60,
         model_threshold: document.getElementById('model_threshold').value
           ? parseFloat(document.getElementById('model_threshold').value)
           : 0.5,
+        model_path: modelPathVal || null,
+        max_tilt: document.getElementById('max_tilt').value
+          ? parseFloat(document.getElementById('max_tilt').value)
+          : 0.1,
+        risk_leverage_min: document.getElementById('risk_leverage_min').value
+          ? parseFloat(document.getElementById('risk_leverage_min').value)
+          : 0.2,
+        risk_leverage_max: document.getElementById('risk_leverage_max').value
+          ? parseFloat(document.getElementById('risk_leverage_max').value)
+          : 1.0,
+        risk_leverage_score_lo: document.getElementById('risk_leverage_score_lo').value
+          ? parseFloat(document.getElementById('risk_leverage_score_lo').value)
+          : 0.2,
+        risk_leverage_score_hi: document.getElementById('risk_leverage_score_hi').value
+          ? parseFloat(document.getElementById('risk_leverage_score_hi').value)
+          : 0.8,
       };
 
       if (payload.asset_cols.length === 0) {
@@ -656,6 +1050,7 @@
 
     loadAlgorithms();
     loadAssets();
+    loadTrendModels();
   </script>
 </body>
 </html>

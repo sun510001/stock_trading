@@ -56,7 +56,10 @@ class LogConfigurator:
         console_handler.setFormatter(log_format)
         root_logger.addHandler(console_handler)
 
-        root_logger.info("Logging system initialized.")
+        import multiprocessing
+        if multiprocessing.current_process().name == 'MainProcess':
+            root_logger.info("Logging system initialized.")
+            
         return root_logger
 
 # Initialize logger instance at module level for global access

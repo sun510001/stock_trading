@@ -44,6 +44,13 @@ class AssetModels:
         data_end_date: Optional[str] = Field(
             None, description="Latest date in local CSV file"
         )
+        processed: bool = Field(
+            False, description="Whether the asset exists in the aligned_assets.csv"
+        )
+        derived: bool = Field(
+            False,
+            description="Whether this asset is a derived/virtual column (not editable/downloadable raw source)",
+        )
 
 
 class APIManager:
@@ -88,6 +95,16 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
     results: List[AssetModels.AssetWithMeta] = []
     data_dir = os.path.join(project_root, "data")
 
+    # 尝试读取已处理对齐矩阵，以标记哪些资产已进入 aligned_assets.csv
+    aligned_path = os.path.join(project_root, "data_processed", "aligned_assets.csv")
+    aligned_cols: List[str] = []
+    if os.path.exists(aligned_path):
+        try:
+            aligned_df = pd.read_csv(aligned_path, nrows=1)
+            aligned_cols = [str(c) for c in aligned_df.columns if c != "Date"]
+        except Exception:
+            aligned_cols = []
+
     for asset in assets:
         safe_name = sanitize_filename(asset["name"])
         csv_path = os.path.join(data_dir, f"{safe_name}.csv")
@@ -101,9 +118,32 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
             except Exception:
                 pass
 
+        processed = asset["name"] in aligned_cols
+
         results.append(
             AssetModels.AssetWithMeta(
-                **asset, data_start_date=d_start, data_end_date=d_end
+                **asset,
+                data_start_date=d_start,
+                data_end_date=d_end,
+                processed=processed,
+                derived=False,
+            )
+        )
+
+    # 将派生列 TermSpread 暴露在 Asset Management 列表中（虚拟资产，不写入 assets.json）
+    if "TermSpread" in aligned_cols and not any(a.name == "TermSpread" for a in results):
+        results.append(
+            AssetModels.AssetWithMeta(
+                name="TermSpread",
+                ticker="DERIVED",
+                kind="derived",
+                engine=None,
+                duration=None,
+                initial_start_date=None,
+                data_start_date=None,
+                data_end_date=None,
+                processed=True,
+                derived=True,
             )
         )
     return results
@@ -206,8 +246,10 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
 def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
     """Process and align data for **all** configured assets.
 
-    点击 UI 的 "Process Data" 时，不再依赖勾选状态，始终根据
-    config/assets.json 中的全部资产重建全局对齐文件 aligned_assets.csv。
+    说明:
+    - 对齐矩阵始终基于 config/assets.json 的全部资产构建。
+    - 若 UI 传入勾选资产 names，且其中同时包含 US30Y 与 US3M，
+      则自动在 aligned_assets.csv 中派生 TermSpread 列。
     """
     assets = AssetConfigManager.load_assets()
     if not assets:
@@ -215,12 +257,20 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
             status_code=400, detail="No assets configured for processing."
         )
 
+    selected_names: Optional[set[str]] = None
+    if req.names:
+        selected_names = set(req.names)
+
     try:
         processor = DataProcessor(
             raw_path=os.path.join(project_root, "data"),
             processed_path=os.path.join(project_root, "data_processed"),
         )
-        full_path = processor.process_and_align(assets, output_filename="aligned_assets.csv")
+        full_path = processor.process_and_align(
+            assets,
+            output_filename="aligned_assets.csv",
+            selected_asset_names=selected_names,
+        )
 
         return {
             "detail": "Alignment complete.",
@@ -230,6 +280,27 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"System error: {str(e)}")
+
+
+@app.get("/api/trend_models")
+def list_trend_models() -> List[Dict[str, str]]:
+    """Scan .private_data/models for .pkl and .pt files."""
+    models_dir = os.path.join(project_root, ".private_data", "models")
+    if not os.path.isdir(models_dir):
+        return []
+
+    results: List[Dict[str, str]] = []
+    for fname in os.listdir(models_dir):
+        if not (fname.endswith(".pkl") or fname.endswith(".pt")):
+            continue
+        rel_path = os.path.join(".private_data", "models", fname)
+        results.append(
+            {
+                "key": rel_path,
+                "label": fname,
+            }
+        )
+    return results
 
 
 @app.post("/api/backtest", response_model=BacktestResult)
