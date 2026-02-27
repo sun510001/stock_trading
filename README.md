@@ -9,6 +9,12 @@ The system is designed for backtesting long-term asset allocation strategies (e.
 <details>
 <summary><strong>Updates</strong></summary>
 
+- **2026-02-28**
+  - Integrated PyTorch-based MLP trend models (`torch_mlp`) into the backtest engine and UI.
+  - Added dynamic Risk Leverage controls, allowing the strategy to smoothly transition between Risk and Safe asset buckets based on the trend model's probability score.
+  - Introduced Safe Allocation Modes (`equal_weight`, `fixed_weight`, `single_asset`) for fine-grained control over the defensive portion of the portfolio.
+  - Added automatic saving of backtest configurations to YAML files in `data_processed/configs/` for better reproducibility.
+  - Fixed an issue with excessive HTML file generation by overwriting `backtest_results.html`.
 - **2026-02-22**
   - Added a public template file for trend models so that users can more easily plug in their own models.
   - Adjusted internal subproject references to point to the latest data/code snapshot.
@@ -71,11 +77,13 @@ project_root/
 ### 1. `backend/`: API and Service Layer
 
 #### `backend/service.py` (BacktestService Class)
+
 - **Algorithm Management**: Automatically discovers rebalancing strategies from the `algorithms` module.
 - **Job Execution**: Orchestrates the full backtest workflow, including path resolution, engine instantiation, and result aggregation.
 - **Models**: Defines `BacktestConfig` and `BacktestResult` using Pydantic for robust data validation.
 
 #### `backend/api.py` (APIManager Class)
+
 - **Web Interface**: Provides an interactive dashboard at `/ui` using Tailwind CSS.
 - **REST Endpoints**:
   - `GET /api/algorithms`: Lists available rebalancing strategies.
@@ -92,11 +100,13 @@ project_root/
 ### 2. `data_loader/`: ETL Pipeline
 
 #### `data_loader/yahoo_downloader.py` (YahooIncrementalLoader Class)
+
 - **Incremental Sync**: Each asset is stored as `data/<sanitized_name>.csv`. The downloader reads local history and only requests the missing date range from Yahoo Finance.
 - **Column Normalization**: Standardizes yfinance output into consistent OHLCV columns (`Open`, `High`, `Low`, `Close`, `Volume`) and fills common gaps (e.g., zero/NaN OHLC using `Close`).
 - **Batch Mode**: `download_batch(assets, start_year=1985)` respects per-asset `initial_start_date` when provided, otherwise falls back to `start_year`.
 
 #### `data_loader/data_processor.py` (DataProcessor Class)
+
 - **Yield-to-Price Engines**:
   - `bond_pricing_engine`: Converts yield series into a synthetic total return price series (duration-based approximation).
   - `cash_pricing_engine`: Converts short-rate yields into a cash-like cumulative return series.
