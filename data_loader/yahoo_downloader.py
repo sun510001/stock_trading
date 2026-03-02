@@ -2,7 +2,8 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
-import datetime
+from datetime import datetime
+from typing import Optional
 import re
 import time
 from typing import Dict, List, Any, Optional
@@ -50,15 +51,19 @@ class YahooIncrementalLoader:
             return pd.DataFrame()
 
     @ExecutionDecorators.retry(max_retries=3, delay=5)
-    def download_symbol(self, ticker: str, name: str, start_date_fallback: str = "1985-01-01") -> None:
+    def download_symbol(self, ticker: str, name: str, start_date_fallback: str = "1985-01-01") -> bool:
         """
         Smart downloader that preserves OHLCV data and handles yfinance quirks.
-        It detects existing local data and only downloads the incremental delta.
+        It detects existing local data, drops the last recorded day to avoid 
+        incomplete intraday data, and fetches the incremental delta up to today.
 
         Args:
             ticker (str): Yahoo Finance symbol (e.g., '^NDX').
             name (str): Logical name for the asset.
             start_date_fallback (str): Start date if no local data exists (YYYY-MM-DD).
+            
+        Returns:
+            bool: True if data was successfully downloaded/merged or verified as up-to-date, False if it failed.
         """
         safe_name = sanitize_filename(name)
         file_path = os.path.join(self.storage_path, f"{safe_name}.csv")
@@ -67,16 +72,20 @@ class YahooIncrementalLoader:
         is_update = False
         if not df_old.empty:
             last_date = df_old.index[-1].date()
-            # Start from the next day to avoid overlap
-            start_download_date = last_date + datetime.timedelta(days=1)
-            is_update = True
             
-            # If local data is already up to today, skip download
-            if start_download_date >= datetime.date.today():
-                logger.info(f"[{name}] Already up to date ({last_date}).")
-                return
+            # Check if we have more than one row to safely drop the last one
+            if len(df_old) > 1:
+                # Drop the last row to discard potential incomplete intraday data
+                df_old = df_old.iloc[:-1]
+                is_update = True
+            else:
+                # If only one row exists, discard it and treat it as a fresh download
+                df_old = pd.DataFrame()
+                is_update = False
+                
+            start_download_date = last_date
         else:
-            start_download_date = datetime.datetime.strptime(start_date_fallback, "%Y-%m-%d").date()
+            start_download_date = datetime.strptime(start_date_fallback, "%Y-%m-%d").date()
 
         logger.info(f"[{name}] Downloading {ticker} from {start_download_date}...")
 
@@ -85,11 +94,11 @@ class YahooIncrementalLoader:
             df_new = yf.download(ticker, start=start_download_date, progress=False, auto_adjust=True)
         except Exception as e:
             logger.error(f"[{name}] Download failed: {e}")
-            return
+            return False
 
         if df_new.empty:
-            logger.info(f"[{name}] No new data found on server.")
-            return
+            logger.warning(f"YahooFinance returned empty frame for {ticker} from {start_download_date} or dropped due to intraday.")
+            return False
 
         # Handle MultiIndex column structures from yfinance
         if isinstance(df_new.columns, pd.MultiIndex):
@@ -110,25 +119,41 @@ class YahooIncrementalLoader:
 
         df_new = df_new[desired_cols]
         df_new.index.name = 'Date'
+        df_new = df_new.reset_index()
 
         # Fix zero values or NaNs by filling with Close price
         for col in ['Open', 'High', 'Low']:
             df_new[col] = df_new[col].replace(0, np.nan).fillna(df_new['Close'])
-        
+
         df_new['Volume'] = df_new['Volume'].fillna(0)
 
-        # Merge and sort
-        if is_update:
-            df_final = pd.concat([df_old, df_new])
-            df_final = df_final[~df_final.index.duplicated(keep='last')]
-        else:
-            df_final = df_new
-
-        df_final.sort_index(inplace=True)
-        df_final.to_csv(file_path)
+        logger.info(f"Appending {len(df_new)} rows using Yahoo source from {start_download_date} for {ticker}")
+        df_final = pd.concat([df_old, df_new]).drop_duplicates(subset=['Date'], keep='last').sort_values('Date')
         
-        status = "Updated" if is_update else "Created"
-        logger.info(f"[{name}] {status} successfully. Rows: {len(df_final)}")
+        df_final.to_csv(file_path, index=False)
+        logger.info(f"Updated {ticker} to {file_path}")
+        return True
+
+    def probe_earliest_date(self, ticker: str) -> Optional[datetime]:
+        """
+        Probe the earliest available historical data date for a ticker on Yahoo Finance.
+        Uses a lightweight monthly history request to minimize data overhead.
+
+        Args:
+            ticker (str): The ticker symbol to probe.
+
+        Returns:
+            Optional[datetime]: The earliest date available, or None if the symbol cannot be probed.
+        """
+        try:
+            # yfinance doesn't natively support querying just metadata, so we download monthly to minimize bytes.
+            df = yf.download(ticker, period="max", interval="1mo", progress=False)
+            if df.empty:
+                return None
+            return df.index[0]
+        except Exception as e:
+            logger.warning(f"Failed to probe Yahoo Finance for {ticker}: {str(e)}")
+            return None
 
     def download_batch(self, assets: List[Dict[str, Any]], start_year: int = 1985) -> None:
         """

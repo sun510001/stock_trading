@@ -16,6 +16,7 @@ if project_root not in sys.path:
 from backend.service import BacktestConfig, BacktestResult, BacktestService
 from backend.assets_config import AssetConfigManager
 from data_loader.yahoo_downloader import YahooIncrementalLoader
+from data_loader.akshare_downloader import AkshareIncrementalLoader
 from data_loader.data_processor import DataProcessor
 from utils.naming import sanitize_filename
 
@@ -36,6 +37,9 @@ class AssetModels:
         initial_start_date: Optional[str] = Field(
             "1985-01-02", description="Initial download start date (YYYY-MM-DD)"
         )
+        description: Optional[str] = Field(
+            "", description="A short introduction or description for the asset"
+        )
 
     class AssetWithMeta(AssetConfig):
         data_start_date: Optional[str] = Field(
@@ -43,6 +47,9 @@ class AssetModels:
         )
         data_end_date: Optional[str] = Field(
             None, description="Latest date in local CSV file"
+        )
+        source: Optional[str] = Field(
+            None, description="The origin of data (e.g., 'yahoo', 'akshare')"
         )
         processed: bool = Field(
             False, description="Whether the asset exists in the aligned_assets.csv"
@@ -109,6 +116,7 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
         safe_name = sanitize_filename(asset["name"])
         csv_path = os.path.join(data_dir, f"{safe_name}.csv")
         d_start, d_end = None, None
+        source = asset.get("source", None)
         if os.path.exists(csv_path):
             try:
                 df = pd.read_csv(csv_path, index_col="Date", parse_dates=True)
@@ -120,11 +128,17 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
 
         processed = asset["name"] in aligned_cols
 
+        # Remove "source" from the asset dictionary if it exists to avoid multiple values error
+        # when we pass it explicitly a few lines below.
+        asset_kwargs = asset.copy()
+        asset_kwargs.pop("source", None)
+
         results.append(
             AssetModels.AssetWithMeta(
-                **asset,
+                **asset_kwargs,
                 data_start_date=d_start,
                 data_end_date=d_end,
+                source=source,
                 processed=processed,
                 derived=False,
             )
@@ -142,6 +156,7 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
                 initial_start_date=None,
                 data_start_date=None,
                 data_end_date=None,
+                source="derived",
                 processed=True,
                 derived=True,
             )
@@ -171,9 +186,21 @@ def update_asset(name: str, asset: AssetModels.AssetConfig) -> AssetModels.Asset
 
     for i, a in enumerate(assets):
         if a["name"] == name:
-            assets[i] = asset.model_dump()
+            new_data = asset.model_dump()
+            # Preserve existing source if not overwritten by client, but clear it if ticker changed!
+            if "source" in a:
+                if a["ticker"] == new_data["ticker"]:
+                    new_data["source"] = a["source"]
+                else:
+                    new_data["source"] = None
+            
+            # Preserve existing description if the update doesn't provide a new one
+            if "description" in a and not new_data.get("description"):
+                new_data["description"] = a["description"]
+
+            assets[i] = new_data
             AssetConfigManager.save_assets(assets)
-            return AssetModels.AssetWithMeta(**asset.model_dump())
+            return AssetModels.AssetWithMeta(**new_data)
     raise HTTPException(status_code=404, detail="Asset configuration not found.")
 
 
@@ -231,14 +258,93 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
     try:
         from logger import logger
 
-        logger.info(">>> HTTP TRIGGER: INCREMENTAL DOWNLOAD START <<<")
-        downloader = YahooIncrementalLoader(
-            storage_path=os.path.join(project_root, "data")
-        )
-        downloader.download_batch(assets, start_year=1985)
+        logger.info(">>> HTTP TRIGGER: SMART DUAL-SOURCE DOWNLOAD START <<<")
+        data_path = os.path.join(project_root, "data")
+        yahoo_loader = YahooIncrementalLoader(storage_path=data_path)
+        akshare_loader = AkshareIncrementalLoader(storage_path=data_path)
+        
+        updated_assets = False
+
+        for asset in assets:
+            name = asset["name"]
+            ticker = asset["ticker"]
+            
+            # Start date logic
+            asset_start_date = asset.get("initial_start_date") or asset.get("start_date")
+            start_fallback = asset_start_date if asset_start_date else "1985-01-01"
+            
+            # Known source flow
+            known_source = asset.get("source")
+            success = False
+            
+            if known_source == "yahoo":
+                logger.info(f"Downloading known Yahoo asset: {name} ({ticker})")
+                success = yahoo_loader.download_symbol(ticker, name, start_fallback)
+                if not success:
+                    logger.warning(f"Yahoo failed for {name}. Attempting Akshare fallback...")
+                    success = akshare_loader.download_symbol(ticker, name, start_fallback)
+                    if success:
+                        asset["source"] = "akshare"
+                        updated_assets = True
+
+            elif known_source == "akshare":
+                logger.info(f"Downloading known Akshare asset: {name} ({ticker})")
+                success = akshare_loader.download_symbol(ticker, name, start_fallback)
+                if not success:
+                    logger.warning(f"Akshare failed for {name}. Attempting Yahoo fallback...")
+                    success = yahoo_loader.download_symbol(ticker, name, start_fallback)
+                    if success:
+                        asset["source"] = "yahoo"
+                        updated_assets = True
+            else:
+                # Smart Probing Flow for unknown assets
+                logger.info(f"Unknown source for {name} ({ticker}). Probing both APIs...")
+                d_yf = yahoo_loader.probe_earliest_date(ticker)
+                d_ak = akshare_loader.probe_earliest_date(ticker)
+                
+                if d_yf is None and d_ak is None:
+                    logger.error(f"Asset {name} ({ticker}) could not be resolved on either Yahoo or Akshare.")
+                    continue
+                
+                # Compare and decide
+                chosen_source = None
+                if d_yf is not None and d_ak is None:
+                    chosen_source = "yahoo"
+                elif d_ak is not None and d_yf is None:
+                    chosen_source = "akshare"
+                else:
+                    # Both are valid, choose the one with the earlier date
+                    if d_yf <= d_ak:
+                        chosen_source = "yahoo"
+                    else:
+                        chosen_source = "akshare"
+                
+                logger.info(f"Probe complete. Yahoo: {d_yf}, Akshare: {d_ak}. Chose: {chosen_source} for {name}")
+                asset["source"] = chosen_source
+                updated_assets = True
+                
+                # Perform the actual download
+                if chosen_source == "yahoo":
+                    success = yahoo_loader.download_symbol(ticker, name, start_fallback)
+                elif chosen_source == "akshare":
+                    success = akshare_loader.download_symbol(ticker, name, start_fallback)
+
+            if not success:
+                logger.warning(f"Failed to download/update data for {name} ({ticker}).")
+
+        if updated_assets:
+            # Reconstruct the full assets list keeping the modifications since we only got a view for selected
+            full_assets = AssetConfigManager.load_assets()
+            for full_a in full_assets:
+                for sel_a in assets:
+                    if full_a["name"] == sel_a["name"] and "source" in sel_a:
+                        full_a["source"] = sel_a["source"]
+            AssetConfigManager.save_assets(full_assets)
+
         manager.last_download_ts = time.time()
-        return {"detail": "Batch download complete."}
+        return {"detail": "Smart batch download complete."}
     except Exception as e:
+        logger.exception("Download fault")
         raise HTTPException(status_code=500, detail=f"System error: {str(e)}")
 
 
@@ -315,6 +421,54 @@ def backtest_endpoint(req: BacktestConfig) -> BacktestResult:
         raise HTTPException(
             status_code=500, detail=f"Internal backtest error: {e}"
         )
+
+
+@app.get("/api/configs/best")
+def list_best_configs() -> List[str]:
+    """List all saved configuration files in data_processed/configs/best."""
+    configs_dir = os.path.join(project_root, "data_processed", "configs", "best")
+    if not os.path.isdir(configs_dir):
+        return []
+    files = [f for f in os.listdir(configs_dir) if f.endswith(".yaml")]
+    files.sort(reverse=True)
+    return files
+
+
+@app.get("/api/configs/best/{filename}")
+def get_best_config(filename: str) -> Dict[str, Any]:
+    """Get the contents of a specific saved configuration."""
+    configs_dir = os.path.join(project_root, "data_processed", "configs", "best")
+    file_path = os.path.join(configs_dir, filename)
+    import yaml
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="Config file not found")
+    with open(file_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+@app.post("/api/configs/best")
+def save_best_config(req: BacktestConfig) -> Dict[str, str]:
+    """Save the current configuration to data_processed/configs/best."""
+    from datetime import datetime
+    import yaml
+
+    configs_dir = os.path.join(project_root, "data_processed", "configs", "best")
+    os.makedirs(configs_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    algo_short = req.algorithm.replace("_rebalance", "")
+    model_info = f"_{req.trend_model_type}" if req.use_trend_model else ""
+    yaml_filename = f"config_{timestamp}_{algo_short}{model_info}.yaml"
+    yaml_path = os.path.join(configs_dir, yaml_filename)
+
+    try:
+        cfg_dict = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        with open(yaml_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg_dict, f, allow_unicode=True, sort_keys=False)
+        return {"detail": "Config saved successfully", "filename": yaml_filename}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save config YAML: {e}")
 
 
 results_dir = os.path.join(project_root, "data_processed")
