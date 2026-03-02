@@ -13,9 +13,76 @@
     button { padding:8px 12px; border:none; border-radius:4px; background:#0af; color:#111; font-weight:bold; cursor:pointer; }
     button:disabled { opacity:0.6; cursor:not-allowed; }
     .grid-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; }
-    .stat-card { background:#181818; border:1px solid #333; border-radius:6px; padding:8px; }
-    .stat-label { font-size:12px; color:#888; }
-    .stat-value { font-size:18px; font-weight:bold; }
+    .stat-card { background:#181818; border:1px solid #333; border-radius:6px; padding:8px; position:relative; }
+    .stat-label { font-size:12px; color:#888; border-bottom: 1px dotted #888; cursor: help; display: inline-block; }
+    .stat-value { font-size:18px; font-weight:bold; margin-top:4px; }
+    .stat-card:hover .tooltip { opacity: 1; visibility: visible; }
+    .tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: #333;
+      color: #fff;
+      text-align: left;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      white-space: normal;
+      width: max-content;
+      max-width: 220px;
+      line-height: 1.4;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.2s;
+      z-index: 100;
+      margin-bottom: 5px;
+      pointer-events: none;
+    }
+    .tooltip::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #333 transparent transparent transparent;
+    }
+    .table-tooltip-container { position: relative; display: inline-block; cursor: help; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: #888; }
+    .table-tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      transform: none;
+      background-color: #333;
+      color: #fff;
+      text-align: left;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      white-space: pre-wrap;
+      width: max-content;
+      max-width: 250px;
+      line-height: 1.4;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.05s ease-in-out;
+      z-index: 999;
+      margin-bottom: 6px;
+      pointer-events: none;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    .table-tooltip::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 10px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #333 transparent transparent transparent;
+    }
+    .table-tooltip-container:hover .table-tooltip { opacity: 1; visibility: visible; }
     .error { background:#611; border:1px solid #a33; border-radius:6px; padding:8px; margin-top:8px; display:none; }
     iframe { width:100%; height:1000px; border:none; border-radius:6px; background:#000; }
     
@@ -77,7 +144,21 @@
       <div class='top-layout'>
         <!-- LEFT: Configuration Panel -->
         <div class='panel self-start'>
-          <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Configuration</h2>
+          <div class="flex items-center justify-between mb-4 border-b border-gray-700 pb-2">
+            <h2 class="text-lg font-bold">Configuration</h2>
+          </div>
+          
+          <!-- Saved Config Loader -->
+          <div class="mb-4 bg-[#2a2a2a] p-3 rounded-lg border border-gray-700 flex flex-col gap-2">
+            <label class="text-xs text-gray-400">Load Saved Configuration</label>
+            <div class="flex gap-2">
+              <select id="saved_configs_select" class="flex-1 text-sm bg-[#1a1a1a]">
+                <option value="">-- Select Configuration --</option>
+              </select>
+              <button type="button" id="load-config-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 text-sm rounded transition-colors">Load</button>
+            </div>
+          </div>
+
           <form id='backtest-form' class="flex-1 flex flex-col justify-between space-y-4">
             <div class="space-y-4">
               <!-- Basic Parameters Group -->
@@ -85,13 +166,6 @@
                 <div class="col-span-2">
                   <label>Algorithm</label>
                   <select id='algorithm' name='algorithm'></select>
-                </div>
-                <div class="col-span-2">
-                  <label>Signal Weighted Mode</label>
-                  <select id='signal_weight_mode'>
-                    <option value='raw_signal_tilt'>Raw Signal Tilt</option>
-                    <option value='signal_tilt_with_risk_leverage'>Signal Tilt + Risk Leverage</option>
-                  </select>
                 </div>
                 <div>
                   <label>Initial Capital</label>
@@ -124,9 +198,9 @@
                 <div id="asset-pool" class="asset-pool"></div>
 
                 <div>
-                  <label class="text-xs text-gray-400">Strategy Assets</label>
+                  <label class="text-xs text-gray-400">Candidate Assets</label>
                   <div id="strategy-dropzone" class="dropzone" data-type="strategy"></div>
-                  <input type='hidden' id='asset_cols'>
+                  <input type='hidden' id='candidate_assets'>
                 </div>
 
                 <div>
@@ -136,32 +210,9 @@
                 </div>
 
                 <div>
-                  <label class="text-xs text-gray-400">Risk Assets (Optional)</label>
-                  <div id="risk-dropzone" class="dropzone" data-type="risk"></div>
-                  <input type='hidden' id='risk_asset_cols'>
-                </div>
-
-                <div>
-                  <label class="text-xs text-gray-400">Safe Assets (Optional)</label>
+                  <label class="text-xs text-gray-400">Safe Assets (for Risk-off)</label>
                   <div id="safe-dropzone" class="dropzone" data-type="safe"></div>
-                  <input type='hidden' id='safe_asset_cols'>
-                </div>
-
-                <div class="col-span-2 space-y-2">
-                  <label class="text-xs text-gray-400">Safe Allocation Mode</label>
-                  <select id='safe_allocation_mode'>
-                    <option value='equal_weight'>Equal Weight</option>
-                    <option value='fixed_weight'>Fixed Weight</option>
-                    <option value='single_asset'>Single Asset</option>
-                  </select>
-                  <div id="safe-fixed-weights-wrap" class="hidden">
-                    <label class="text-[11px] text-gray-500">Fixed Weights (one per line, `Asset=Weight`)</label>
-                    <textarea id="safe_fixed_weights_text" rows="3" placeholder="SHY=0.7&#10;IEF=0.3"></textarea>
-                  </div>
-                  <div id="safe-single-asset-wrap" class="hidden">
-                    <label class="text-[11px] text-gray-500">Single Safe Asset</label>
-                    <select id='safe_single_asset'></select>
-                  </div>
+                  <input type='hidden' id='safe_assets'>
                 </div>
               </div>
 
@@ -183,8 +234,6 @@
                         <option value='kmeans_window'>kmeans_window</option>
                         <option value='random_forest'>random_forest</option>
                         <option value='torch_mlp'>torch_mlp</option>
-                        <option value='autoencoder'>autoencoder</option>
-                        <option value='hmm'>hmm</option>
                       </select>
                     </div>
                     <div>
@@ -207,32 +256,33 @@
                 </div>
               </div>
 
-              <!-- Risk Leverage Group -->
+              <!-- Volatility & Position Params -->
               <div class="border-t border-gray-700 pt-3 mt-3 space-y-3">
-                <label class="text-sm font-semibold text-blue-400">Risk Leverage Params</label>
-                <div id="risk-leverage-fields" class="grid grid-cols-2 gap-3 transition-opacity duration-200">
+                <label class="text-sm font-semibold text-blue-400">Position Sizing & Volatility</label>
+                <div class="grid grid-cols-2 gap-3 transition-opacity duration-200">
                   <div>
-                    <label>Leverage Min</label>
-                    <input type='number' id='risk_leverage_min' value='0.2' step='0.005' min='0' max='1'>
+                    <label>Candidate Top K</label>
+                    <input type='number' id='top_k' value='3' min='1' step='1'>
                   </div>
                   <div>
-                    <label>Leverage Max</label>
-                    <input type='number' id='risk_leverage_max' value='1.0' step='0.005' min='0' max='1'>
+                    <label>Target Volatility</label>
+                    <input type='number' id='target_volatility' value='0.10' step='0.01' min='0.01' max='1.0'>
                   </div>
                   <div>
-                    <label>Score Lo</label>
-                    <input type='number' id='risk_leverage_score_lo' value='0.2' step='0.005' min='0' max='1'>
+                    <label>Vol Lookback Window</label>
+                    <input type='number' id='vol_lookback' value='60' min='10' step='1'>
                   </div>
                   <div>
-                    <label>Score Hi</label>
-                    <input type='number' id='risk_leverage_score_hi' value='0.8' step='0.005' min='0' max='1'>
+                    <label>Max Leverage</label>
+                    <input type='number' id='max_leverage' value='1.0' step='0.1' min='1.0' max='5.0'>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div class="pt-4 mt-auto">
+            <div class="pt-4 mt-auto space-y-2">
               <button type='submit' id='run-btn' class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded transition-colors">Run Backtest</button>
+              <button type='button' id='save-config-btn' disabled class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Save Configuration</button>
               <div id='error-msg' class='error'></div>
             </div>
           </form>
@@ -313,11 +363,11 @@
 
         <div id='results-panel' class="hidden space-y-4">
           <div class='panel'>
-            <h2 class="text-lg font-bold mb-4">Statistics</h2>
+            <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Statistics</h2>
             <div id='stats-grid' class='grid-stats'></div>
           </div>
           <div class='panel'>
-            <h2 class="text-lg font-bold mb-4">Performance Chart</h2>
+            <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Performance Chart</h2>
             <iframe id='plot-frame' src=''></iframe>
           </div>
         </div>
@@ -328,6 +378,7 @@
   <script>
     let lastSavedAssetName = null;
     let allAssetsList = [];
+    let lastBacktestPayload = null;
     const STORAGE_KEY = 'backtest_asset_selection_v1';
 
     async function loadAlgorithms() {
@@ -362,6 +413,114 @@
         });
       } catch (e) {
         console.error('Failed to load trend models', e);
+      }
+    }
+
+    async function loadSavedConfigs() {
+      try {
+        const res = await fetch('/api/configs/best');
+        const configs = await res.json();
+        const select = document.getElementById('saved_configs_select');
+        select.innerHTML = '<option value="">-- Select Configuration --</option>';
+        configs.forEach(cfg => {
+          const opt = document.createElement('option');
+          opt.value = cfg;
+          opt.textContent = cfg;
+          select.appendChild(opt);
+        });
+      } catch (e) {
+        console.error('Failed to load saved configurations', e);
+      }
+    }
+
+    async function handleLoadConfig() {
+      const filename = document.getElementById('saved_configs_select').value;
+      if (!filename) {
+        alert('Please select a configuration to load.');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/configs/best/${filename}`);
+        if (!res.ok) throw new Error('Failed to fetch config');
+        const cfg = await res.json();
+        
+        // Fill form fields
+        if (cfg.algorithm) document.getElementById('algorithm').value = cfg.algorithm;
+        if (cfg.initial_capital) document.getElementById('initial_capital').value = cfg.initial_capital;
+        if (cfg.rebalance_interval_days) document.getElementById('rebalance_interval_days').value = cfg.rebalance_interval_days;
+        else document.getElementById('rebalance_interval_days').value = '';
+        if (cfg.start_date) document.getElementById('start_date').value = cfg.start_date;
+        if (cfg.end_date) document.getElementById('end_date').value = cfg.end_date;
+        if (cfg.max_tilt !== undefined) document.getElementById('max_tilt').value = cfg.max_tilt;
+
+        if (cfg.use_trend_model !== undefined) {
+           document.getElementById('use_trend_model').checked = cfg.use_trend_model;
+           updateTrendModelEnabled();
+        }
+        if (cfg.trend_model_type) document.getElementById('model_type').value = cfg.trend_model_type;
+        if (cfg.model_lookback_days) document.getElementById('model_lookback_days').value = cfg.model_lookback_days;
+        if (cfg.model_path) document.getElementById('model_path').value = cfg.model_path;
+        if (cfg.model_threshold !== undefined) document.getElementById('model_threshold').value = cfg.model_threshold;
+        updateModelPathEnabled();
+
+        if (cfg.top_k !== undefined) document.getElementById('top_k').value = cfg.top_k;
+        if (cfg.target_volatility !== undefined) document.getElementById('target_volatility').value = cfg.target_volatility;
+        if (cfg.vol_lookback !== undefined) document.getElementById('vol_lookback').value = cfg.vol_lookback;
+        if (cfg.max_leverage !== undefined) document.getElementById('max_leverage').value = cfg.max_leverage;
+
+        // Restore Assets to Dropzones
+        const stratZone = document.getElementById('strategy-dropzone');
+        const benchZone = document.getElementById('benchmark-dropzone');
+        const safeZone = document.getElementById('safe-dropzone');
+        stratZone.innerHTML = '';
+        benchZone.innerHTML = '';
+        safeZone.innerHTML = '';
+        
+        const ensureChips = (arr, zone, type) => {
+           if(Array.isArray(arr)) {
+               arr.forEach(name => {
+                   if (allAssetsList.find(a => a.name === name) && !zone.querySelector(`[data-name="${name}"]`)) {
+                       zone.appendChild(createAssetChip(name, type));
+                   }
+               });
+           }
+        };
+
+        ensureChips(cfg.candidate_assets, stratZone, 'strategy');
+        ensureChips(cfg.benchmark_cols, benchZone, 'benchmark');
+        ensureChips(cfg.safe_assets, safeZone, 'safe');
+
+        updateHiddenInputs();
+
+        alert('Configuration loaded successfully.');
+      } catch (e) {
+        alert('Failed to load configuration: ' + e.message);
+      }
+    }
+
+    async function handleSaveConfig() {
+      if (!lastBacktestPayload) return;
+      const btn = document.getElementById('save-config-btn');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const res = await fetch('/api/configs/best', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lastBacktestPayload),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert('Configuration saved: ' + data.filename);
+          loadSavedConfigs();
+        } else {
+          alert('Failed to save: ' + (data.detail || 'Unknown error'));
+        }
+      } catch (e) {
+        alert('Failed to save configuration.');
+      } finally {
+        btn.textContent = 'Save Config';
+        btn.disabled = false;
       }
     }
 
@@ -412,26 +571,18 @@
 
     function updateHiddenInputs() {
       const stratChips = Array.from(document.querySelectorAll('#strategy-dropzone .asset-chip'));
-      document.getElementById('asset_cols').value = stratChips.map(c => c.dataset.name).join(',');
+      document.getElementById('candidate_assets').value = stratChips.map(c => c.dataset.name).join(',');
 
       const benchChips = Array.from(document.querySelectorAll('#benchmark-dropzone .asset-chip'));
       document.getElementById('benchmark_cols').value = benchChips.map(c => c.dataset.name).join(',');
 
-      const riskChips = Array.from(document.querySelectorAll('#risk-dropzone .asset-chip'));
-      document.getElementById('risk_asset_cols').value = riskChips.map(c => c.dataset.name).join(',');
-
       const safeChips = Array.from(document.querySelectorAll('#safe-dropzone .asset-chip'));
-      document.getElementById('safe_asset_cols').value = safeChips.map(c => c.dataset.name).join(',');
-      refreshSafeSingleAssetOptions();
+      document.getElementById('safe_assets').value = safeChips.map(c => c.dataset.name).join(',');
 
       const state = {
         strategy: stratChips.map(c => c.dataset.name),
         benchmarks: benchChips.map(c => c.dataset.name),
-        riskAssets: riskChips.map(c => c.dataset.name),
-        safeAssets: safeChips.map(c => c.dataset.name),
-        safeAllocationMode: document.getElementById('safe_allocation_mode').value,
-        safeFixedWeightsText: document.getElementById('safe_fixed_weights_text').value,
-        safeSingleAsset: document.getElementById('safe_single_asset').value || '',
+        safe_assets: safeChips.map(c => c.dataset.name),
       };
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -441,10 +592,9 @@
     }
 
     function clearStrategyAndBenchmarks() {
-      if (!confirm('Clear Strategy / Benchmarks / Risk / Safe selections?')) return;
+      if (!confirm('Clear Candidate / Benchmarks / Safe selections?')) return;
       document.getElementById('strategy-dropzone').innerHTML = '';
       document.getElementById('benchmark-dropzone').innerHTML = '';
-      document.getElementById('risk-dropzone').innerHTML = '';
       document.getElementById('safe-dropzone').innerHTML = '';
       updateHiddenInputs();
     }
@@ -471,77 +621,6 @@
       }
     }
 
-    function updateRiskLeverageEnabled() {
-      const mode = document.getElementById('signal_weight_mode').value;
-      const enabled = mode === 'signal_tilt_with_risk_leverage';
-      const fields = document.getElementById('risk-leverage-fields');
-      const inputs = fields.querySelectorAll('input');
-      inputs.forEach(el => el.disabled = !enabled);
-      fields.style.opacity = enabled ? '1' : '0.4';
-      fields.style.pointerEvents = enabled ? 'auto' : 'none';
-    }
-
-    function refreshSafeSingleAssetOptions() {
-      const select = document.getElementById('safe_single_asset');
-      if (!select) return;
-      const prev = select.value;
-      const safeNames = Array.from(document.querySelectorAll('#safe-dropzone .asset-chip'))
-        .map(c => c.dataset.name)
-        .filter(Boolean);
-
-      select.innerHTML = '';
-      if (safeNames.length === 0) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = '[none]';
-        select.appendChild(opt);
-        select.value = '';
-        return;
-      }
-
-      safeNames.forEach(name => {
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        select.appendChild(opt);
-      });
-      select.value = safeNames.includes(prev) ? prev : safeNames[0];
-    }
-
-    function updateSafeAllocationModeUI() {
-      const mode = document.getElementById('safe_allocation_mode').value;
-      const fixedWrap = document.getElementById('safe-fixed-weights-wrap');
-      const singleWrap = document.getElementById('safe-single-asset-wrap');
-      if (!fixedWrap || !singleWrap) return;
-      fixedWrap.classList.toggle('hidden', mode !== 'fixed_weight');
-      singleWrap.classList.toggle('hidden', mode !== 'single_asset');
-      refreshSafeSingleAssetOptions();
-    }
-
-    function parseSafeFixedWeights(text) {
-      const result = {};
-      const raw = (text || '').trim();
-      if (!raw) return result;
-
-      const parts = raw
-        .split(/\n|,/)
-        .map(s => s.trim())
-        .filter(Boolean);
-
-      for (const part of parts) {
-        const pair = part.split(/=|:/).map(s => s.trim());
-        if (pair.length !== 2 || !pair[0] || !pair[1]) {
-          throw new Error(`Invalid fixed weight entry: "${part}". Use Asset=Weight`);
-        }
-        const value = parseFloat(pair[1]);
-        if (!Number.isFinite(value) || value < 0) {
-          throw new Error(`Invalid weight for "${pair[0]}": ${pair[1]}`);
-        }
-        result[pair[0]] = value;
-      }
-      return result;
-    }
-
     // Setup Drag and Drop
     document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.dropzone').forEach(zone => {
@@ -559,14 +638,6 @@
           if (!name) return;
           // Prevent duplicates in same zone
           if (zone.querySelector(`[data-name="${name}"]`)) return;
-          // Risk/Safe are mutually exclusive: moving to one removes it from the other.
-          if (zone.dataset.type === 'risk') {
-            const existing = document.querySelector(`#safe-dropzone [data-name="${name}"]`);
-            if (existing) existing.remove();
-          } else if (zone.dataset.type === 'safe') {
-            const existing = document.querySelector(`#risk-dropzone [data-name="${name}"]`);
-            if (existing) existing.remove();
-          }
           const chip = createAssetChip(name, zone.dataset.type);
           zone.appendChild(chip);
           updateHiddenInputs();
@@ -579,18 +650,9 @@
         updateModelPathEnabled();
       };
       document.getElementById('model_type').onchange = updateModelPathEnabled;
-      document.getElementById('signal_weight_mode').onchange = updateRiskLeverageEnabled;
-      document.getElementById('safe_allocation_mode').onchange = () => {
-        updateSafeAllocationModeUI();
-        updateHiddenInputs();
-      };
-      document.getElementById('safe_fixed_weights_text').oninput = updateHiddenInputs;
-      document.getElementById('safe_single_asset').onchange = updateHiddenInputs;
 
       updateTrendModelEnabled();
       updateModelPathEnabled();
-      updateRiskLeverageEnabled();
-      updateSafeAllocationModeUI();
     });
 
     async function loadAssets() {
@@ -607,7 +669,9 @@
           const isDerived = !!a.derived;
           tr.innerHTML = `
             <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}" ${isDerived ? 'disabled title="Derived asset: no raw download/process selection"' : ''}></td>
-            <td>${a.name}</td>
+            <td>
+              ${a.description ? `<div class="table-tooltip-container">${a.name}<div class="table-tooltip">${a.description}</div></div>` : a.name}
+            </td>
             <td>${a.ticker}</td>
             <td>${a.kind}</td>
             <td>${a.engine || '-'}</td>
@@ -653,16 +717,11 @@
             const state = JSON.parse(saved);
             const stratZone = document.getElementById('strategy-dropzone');
             const benchZone = document.getElementById('benchmark-dropzone');
-            const riskZone = document.getElementById('risk-dropzone');
             const safeZone = document.getElementById('safe-dropzone');
-            const safeModeSelect = document.getElementById('safe_allocation_mode');
-            const safeFixedWeightsText = document.getElementById('safe_fixed_weights_text');
-            const safeSingleAssetSelect = document.getElementById('safe_single_asset');
 
             // 清空现有 chip，避免多次 loadAssets 叠加重复
             stratZone.innerHTML = '';
             benchZone.innerHTML = '';
-            riskZone.innerHTML = '';
             safeZone.innerHTML = '';
 
             if (state.strategy && Array.isArray(state.strategy)) {
@@ -683,17 +742,8 @@
                 }
               });
             }
-            if (state.riskAssets && Array.isArray(state.riskAssets)) {
-              state.riskAssets.forEach(name => {
-                if (allAssetsList.find(a => a.name === name)) {
-                  if (!riskZone.querySelector(`[data-name="${name}"]`)) {
-                    riskZone.appendChild(createAssetChip(name, 'risk'));
-                  }
-                }
-              });
-            }
-            if (state.safeAssets && Array.isArray(state.safeAssets)) {
-              state.safeAssets.forEach(name => {
+            if (state.safe_assets && Array.isArray(state.safe_assets)) {
+              state.safe_assets.forEach(name => {
                 if (allAssetsList.find(a => a.name === name)) {
                   if (!safeZone.querySelector(`[data-name="${name}"]`)) {
                     safeZone.appendChild(createAssetChip(name, 'safe'));
@@ -701,20 +751,7 @@
                 }
               });
             }
-            if (safeModeSelect && state.safeAllocationMode) {
-              safeModeSelect.value = state.safeAllocationMode;
-            }
-            if (safeFixedWeightsText && typeof state.safeFixedWeightsText === 'string') {
-              safeFixedWeightsText.value = state.safeFixedWeightsText;
-            }
             updateHiddenInputs();
-            if (safeSingleAssetSelect && state.safeSingleAsset) {
-              const exists = Array.from(safeSingleAssetSelect.options).some(
-                opt => opt.value === state.safeSingleAsset
-              );
-              if (exists) safeSingleAssetSelect.value = state.safeSingleAsset;
-            }
-            updateSafeAllocationModeUI();
           }
         } catch (e) {
           console.warn('Failed to restore asset selection from storage', e);
@@ -855,7 +892,7 @@
         return;
       }
 
-      const selectedAssetCols = document.getElementById('asset_cols').value
+      const selectedAssetCols = document.getElementById('candidate_assets').value
         .split(',')
         .map(s => s.trim())
         .filter(Boolean);
@@ -863,60 +900,13 @@
         .split(',')
         .map(s => s.trim())
         .filter(Boolean);
-      const strategySet = new Set(selectedAssetCols);
-      const selectedRiskCols = document.getElementById('risk_asset_cols').value
+      const selectedSafeCols = document.getElementById('safe_assets').value
         .split(',')
         .map(s => s.trim())
-        .filter(Boolean)
-        .filter(name => strategySet.has(name));
-      const selectedSafeCols = document.getElementById('safe_asset_cols').value
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .filter(name => strategySet.has(name));
-      const safeAllocationMode = document.getElementById('safe_allocation_mode').value;
-
-      let safeFixedWeights = null;
-      if (safeAllocationMode === 'fixed_weight' && selectedSafeCols.length > 0) {
-        try {
-          const parsed = parseSafeFixedWeights(
-            document.getElementById('safe_fixed_weights_text').value
-          );
-          const safeSet = new Set(selectedSafeCols);
-          safeFixedWeights = Object.fromEntries(
-            Object.entries(parsed).filter(([name]) => safeSet.has(name))
-          );
-          const sumW = Object.values(safeFixedWeights).reduce((acc, v) => acc + v, 0);
-          if (sumW <= 0) {
-            throw new Error('Fixed weights must include at least one safe asset with weight > 0.');
-          }
-        } catch (err) {
-          loading.classList.add('hidden');
-          runBtn.disabled = false;
-          errorMsg.textContent = err.message || 'Invalid safe fixed weights';
-          errorMsg.style.display = 'block';
-          return;
-        }
-      }
-
-      let safeSingleAsset = null;
-      if (safeAllocationMode === 'single_asset' && selectedSafeCols.length > 0) {
-        const single = (document.getElementById('safe_single_asset').value || '').trim();
-        safeSingleAsset = selectedSafeCols.includes(single) ? single : selectedSafeCols[0];
-      }
-
-      const overlapRiskSafe = selectedRiskCols.filter(name => selectedSafeCols.includes(name));
-      if (overlapRiskSafe.length > 0) {
-        loading.classList.add('hidden');
-        runBtn.disabled = false;
-        errorMsg.textContent =
-          'Risk Assets and Safe Assets overlap: ' + overlapRiskSafe.join(', ') + '. Please separate them.';
-        errorMsg.style.display = 'block';
-        return;
-      }
-
-      // 校验：不允许选择未 Process Data 的资产参与回测/基准
-      const selectedAll = [...selectedAssetCols, ...selectedBenchmarkCols, ...selectedRiskCols, ...selectedSafeCols];
+        .filter(Boolean);
+      
+      // 校验：不允许选择未 Process Data 的资产参与回测/基准/防御
+      const selectedAll = [...selectedAssetCols, ...selectedBenchmarkCols, ...selectedSafeCols];
       const notProcessed = selectedAll
         .filter(n => n)
         .filter((n, idx, arr) => arr.indexOf(n) === idx)
@@ -938,22 +928,17 @@
 
       const payload = {
         algorithm: document.getElementById('algorithm').value,
-        signal_weight_mode: document.getElementById('signal_weight_mode').value,
         start_date: document.getElementById('start_date').value || null,
         end_date: document.getElementById('end_date').value || null,
         initial_capital: parseFloat(document.getElementById('initial_capital').value),
-        asset_cols: selectedAssetCols,
-        risk_asset_cols: selectedRiskCols,
-        safe_asset_cols: selectedSafeCols,
-        safe_allocation_mode: safeAllocationMode,
-        safe_fixed_weights: safeFixedWeights,
-        safe_single_asset: safeSingleAsset,
+        candidate_assets: selectedAssetCols.length > 0 ? selectedAssetCols : null,
         benchmark_cols: selectedBenchmarkCols,
+        safe_assets: selectedSafeCols.length > 0 ? selectedSafeCols : ["US30Y", "GoldIndex", "US3M"],
         rebalance_interval_days: document.getElementById('rebalance_interval_days').value
           ? parseInt(document.getElementById('rebalance_interval_days').value)
           : null,
         use_trend_model: useTrend,
-        model_type: modelType,
+        trend_model_type: modelType,
         model_lookback_days: document.getElementById('model_lookback_days').value
           ? parseInt(document.getElementById('model_lookback_days').value)
           : 60,
@@ -961,26 +946,19 @@
           ? parseFloat(document.getElementById('model_threshold').value)
           : 0.5,
         model_path: modelPathVal || null,
-        max_tilt: document.getElementById('max_tilt').value
-          ? parseFloat(document.getElementById('max_tilt').value)
-          : 0.1,
-        risk_leverage_min: document.getElementById('risk_leverage_min').value
-          ? parseFloat(document.getElementById('risk_leverage_min').value)
-          : 0.2,
-        risk_leverage_max: document.getElementById('risk_leverage_max').value
-          ? parseFloat(document.getElementById('risk_leverage_max').value)
+        top_k: document.getElementById('top_k').value
+          ? parseInt(document.getElementById('top_k').value)
+          : 3,
+        target_volatility: document.getElementById('target_volatility').value
+          ? parseFloat(document.getElementById('target_volatility').value)
+          : 0.10,
+        vol_lookback: document.getElementById('vol_lookback').value
+          ? parseInt(document.getElementById('vol_lookback').value)
+          : 60,
+        max_leverage: document.getElementById('max_leverage').value
+          ? parseFloat(document.getElementById('max_leverage').value)
           : 1.0,
-        risk_leverage_score_lo: document.getElementById('risk_leverage_score_lo').value
-          ? parseFloat(document.getElementById('risk_leverage_score_lo').value)
-          : 0.2,
-        risk_leverage_score_hi: document.getElementById('risk_leverage_score_hi').value
-          ? parseFloat(document.getElementById('risk_leverage_score_hi').value)
-          : 0.8,
       };
-
-      if (payload.asset_cols.length === 0) {
-        payload.asset_cols = null;
-      }
 
       try {
         const res = await fetch('/api/backtest', {
@@ -1002,20 +980,82 @@
           { label: 'Sharpe Ratio', value: s['Sharpe Ratio'].toFixed(2) },
           { label: 'Max Drawdown', value: (s['Max Drawdown'] * 100).toFixed(2) + '%' },
           { label: 'Volatility', value: (s['Volatility'] * 100).toFixed(2) + '%' },
+          { label: 'Alpha', value: (s['Alpha'] * 100).toFixed(2) + '%' },
+          { label: 'Beta', value: s['Beta'].toFixed(2) },
+          { label: 'Info Ratio', value: s['Information Ratio'].toFixed(2) },
+          { label: 'Calmar Ratio', value: s['Calmar Ratio'].toFixed(2) },
+          { label: 'Max Recovery', value: s['Max Recovery Days'] + ' days' },
+          { label: 'Win Rate', value: (s['Win Rate'] * 100).toFixed(2) + '%' },
+          { label: 'P/L Ratio', value: s['P/L Ratio'].toFixed(2) },
           { label: 'Years', value: s['Years'].toFixed(1) },
         ];
 
-        statsGrid.innerHTML = '';
-        metrics.forEach(m => {
-          const card = document.createElement('div');
-          card.className = 'stat-card';
-          card.innerHTML = `<div class='stat-label'>${m.label}</div><div class='stat-value'>${m.value}</div>`;
-          statsGrid.appendChild(card);
-        });
+          const metricDescs = {
+            'Total Return': '回测期内策略的总绝对收益率。<br/>正值越大越好；负值为亏损。',
+            'CAGR': '复合年化收益率 (Compound Annual Growth Rate)。<br/>>15% 优秀，10~15% 良好，<5% 较差。',
+            'Sharpe Ratio': '夏普比率，衡量风险调整后收益，(年化收益)/(年化波动)。<br/>>1 优秀，>0.5 良好，<0 为承担了风险却不如无风险收益。',
+            'Max Drawdown': '最大回撤，期内资产净值自高点下跌的最大百分比。<br/>幅度越小越好；>-10% 极佳，-10~-20% 良好，<-30% 风险较高。',
+            'Volatility': '策略收益的年化波动率(标准差)。<br/>波动越小风险越低；正常多资产策略一般在 10% 左右。',
+            'Alpha': '超额收益，根据Beta模型剔除市场基准后的年化超额部分。<br/>>0 创造了相对于基准的超额收益；<0 则为负超额。',
+            'Beta': '衡量策略收益对基准标的波动的敏感度(系统性风险)。<br/>=1 与基准同等波动；<1 波动较基准小；>1 波动放大。',
+            'Info Ratio': '信息比率，单位残差风险带来的超额收益，(超额均值)/(超额标准差)。<br/>>0.5 良好，>1 优秀。',
+            'Calmar Ratio': '卡玛比率，年化收益与最大回撤(绝对值)的比值。<br/>>2 优秀，1~2 良好，<1 较差。',
+            'Max Recovery': '最长恢复期，资产净值创新高之间的最长间隔天数。<br/>天数越少越好，说明解套越快；建议最好在一年(365天)以内。',
+            'Win Rate': '交易胜率，收益为正的天数占总交易天数的比例。<br/>>55% 优秀，日频回测中 >50% 即有稳定正向期望。',
+            'P/L Ratio': '盈亏比，平均盈利与平均绝对亏损的比率。<br/>>1 代表平均单次盈利高于平均单次亏损，越大越好。',
+            'Years': '本次回测时间跨度的等效年份总数。',
+          };
 
-        plotFrame.src = data.result_url + '?t=' + new Date().getTime();
+          function getMetricColor(label, valueRaw) {
+            const val = parseFloat(String(valueRaw).replace('%', '').replace(' days', ''));
+            if (isNaN(val)) return '';
+
+            const good = '#ef4444';   // 暖色调 (红)
+            const okay = '#f97316';   // 暖色调 (橙)
+            const bad = '#3b82f6';    // 冷色调 (蓝)
+
+            switch (label) {
+              case 'Total Return': case 'CAGR': case 'Alpha':
+                if (val > 15) return good; if (val > 0) return okay; return bad;
+              case 'Sharpe Ratio': case 'Info Ratio':
+                if (val > 1) return good; if (val > 0) return okay; return bad;
+              case 'Max Drawdown': 
+                if (val > -10) return good; if (val > -20) return okay; return bad;
+              case 'Volatility': 
+                if (val < 10) return good; if (val < 15) return okay; return bad;
+              case 'Calmar Ratio':
+                if (val > 2) return good; if (val > 1) return okay; return bad;
+              case 'Max Recovery':
+                if (val < 180) return good; if (val < 365) return okay; return bad;
+              case 'Win Rate':
+                if (val > 55) return good; if (val > 50) return okay; return bad;
+              case 'P/L Ratio':
+                if (val > 1.2) return good; if (val > 1.0) return okay; return bad;
+              default:
+                return '';
+            }
+          }
+
+          statsGrid.innerHTML = '';
+          metrics.forEach(m => {
+            const card = document.createElement('div');
+            card.className = 'stat-card';
+            const desc = metricDescs[m.label] || '';
+            const valColor = getMetricColor(m.label, m.value);
+            const styleStr = valColor ? `style="color:${valColor}"` : '';
+            card.innerHTML = `
+              <div class='tooltip'>${desc}</div>
+              <div class='stat-label'>${m.label}</div>
+              <div class='stat-value' ${styleStr}>${m.value}</div>
+            `;
+            statsGrid.appendChild(card);
+          });        plotFrame.src = data.result_url + '?t=' + new Date().getTime();
         resultsPanel.classList.remove('hidden');
         resultsPanel.scrollIntoView({ behavior: 'smooth' });
+
+        // Save last payload and enable save button
+        lastBacktestPayload = payload;
+        document.getElementById('save-config-btn').disabled = false;
       } catch (err) {
         errorMsg.textContent = err.message;
         errorMsg.style.display = 'block';
@@ -1048,9 +1088,13 @@
       document.getElementById('asset_initial_start_date').value = '1985-01-02';
     };
 
+    document.getElementById('load-config-btn').onclick = handleLoadConfig;
+    document.getElementById('save-config-btn').onclick = handleSaveConfig;
+
     loadAlgorithms();
     loadAssets();
     loadTrendModels();
+    loadSavedConfigs();
   </script>
 </body>
 </html>

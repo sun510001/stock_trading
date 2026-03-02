@@ -1,34 +1,43 @@
-# Stock Trading Backtest System
+# TrendAlloc — Multi-Asset Backtest System
 
-A Python-based multi-asset backtesting system featuring automated data downloading, yield-to-price pricing engines, a core backtest engine with pluggable rebalancing algorithms, and an interactive FastAPI-based web console.
+A Python-based multi-asset backtesting framework featuring automated data downloading, yield-to-price pricing engines, a pluggable rebalancing algorithm interface, optional ML-based trend models, and an interactive FastAPI web console.
 
-The system is designed for backtesting long-term asset allocation strategies (e.g., Permanent Portfolio) with support for arbitrary asset configurations.
+Designed for long-term asset allocation research (e.g., momentum-based, volatility-scaled, or permanent portfolio strategies) with support for arbitrary asset configurations.
 
 ---
 
 <details>
-<summary><strong>Updates</strong></summary>
+<summary><strong>Changelog</strong></summary>
+
+- **2026-03-02**
+  - Decoupled all trading logic from `BacktestEngine`: the engine now only handles the time loop and bookkeeping. Every rebalance decision is fully delegated to a user-supplied `rebalance_fn(ctx: RebalanceContext) -> RebalanceResult`.
+  - Introduced `RebalanceContext` and `RebalanceResult` dataclasses as the v2 interface contract between the engine and strategy functions.
+  - Fixed `BacktestConfig` default algorithm and engine fallback to consistently use `permanent_portfolio_rebalance` (equal-weight).
+  - Fixed `Max Recovery Days` metric — previous implementation measured time spent at a peak level rather than the actual drawdown recovery period.
+  - Made benchmark column for Alpha/Beta calculation dynamic (uses `benchmark_cols[0]` from config instead of a hardcoded `"SP500"`).
+  - Fixed a mutation bug where appending safe assets to `candidate_assets` would silently modify the original Pydantic request object.
+  - Added `predict_score` and `predict_latest_score_from_matrix` to `RandomForestTrendModel`, completing the interface required by the engine's model dispatch chain.
+  - Removed phantom model types (`autoencoder`, `hmm`) from `BacktestConfig` documentation — these had no implementation.
+  - Updated public template files (`algorithms_template.py`, `trend_models_template.py`) to reflect the v2 interface, with clear extension guides for contributors.
 
 - **2026-02-28**
   - Integrated PyTorch-based MLP trend models (`torch_mlp`) into the backtest engine and UI.
-  - Added dynamic Risk Leverage controls, allowing the strategy to smoothly transition between Risk and Safe asset buckets based on the trend model's probability score.
-  - Introduced Safe Allocation Modes (`equal_weight`, `fixed_weight`, `single_asset`) for fine-grained control over the defensive portion of the portfolio.
-  - Added automatic saving of backtest configurations to YAML files in `data_processed/configs/` for better reproducibility.
-  - Fixed an issue with excessive HTML file generation by overwriting `backtest_results.html`.
+  - Added dynamic Risk Leverage controls for smooth transitions between risk and safe asset buckets based on the trend model's probability score.
+  - Added automatic saving of backtest configurations to YAML files in `data_processed/configs/` for reproducibility.
+
 - **2026-02-22**
-  - Added a public template file for trend models so that users can more easily plug in their own models.
-  - Adjusted internal subproject references to point to the latest data/code snapshot.
-  - Cleaned up `.gitignore` rules so that `config/assets.json` is handled correctly and old file paths are no longer referenced.
+  - Added public template files for `algorithms.py` and `trend_models.py`.
+  - Cleaned up `.gitignore` rules for correct handling of `config/assets.json`.
+
 - **2026-02-18**
-  - Refactored the data loading and processing pipeline into clearer stages: incremental raw data download (per selected asset) and full-portfolio processing/alignment driven by configuration.
-  - Introduced the `DataProcessor` class to centralize yield-to-price engines (bond/cash) and build a flexible multi-asset price matrix that only drops fully-empty dates, deferring final "barrel effect" trimming to the backtest layer.
-  - Updated the FastAPI endpoints: `POST /api/assets/download` now strictly works on user-selected assets, while `POST /api/assets/process` always rebuilds `aligned_assets.csv` from all assets defined in `config/assets.json`, independent of UI selection.
+  - Refactored the data pipeline into incremental download (per asset) and full-portfolio alignment stages.
+  - Introduced `DataProcessor` with `bond_pricing_engine` and `cash_pricing_engine` for yield-to-price conversion.
+  - Updated FastAPI endpoints: `POST /api/assets/download` operates on selected assets; `POST /api/assets/process` always rebuilds `aligned_assets.csv` from all configured assets.
 
 - **2026-02-17**
-  - Added UI controls for configuring an unsupervised trend model (model type, fixed lookback window, threshold) and wiring it through the backtest engine.
-  - Introduced a new `signal_weighted_rebalance` algorithm option that tilts portfolio weights based on per-asset trend signals (implementation details remain private).
-  - Enhanced the Performance Chart to display Total Return, CAGR, Sharpe Ratio, and Max Drawdown for both the strategy and all selected benchmarks.
-  - Added a second subplot below the performance chart that shows the portfolio's asset weights over time as a stacked area plot.
+  - Added trend model UI controls (model type, lookback window, threshold).
+  - Enhanced the performance chart with Total Return, CAGR, Sharpe, and Max Drawdown for strategy and all benchmarks.
+  - Added a stacked area subplot showing portfolio asset weights over time.
 
 </details>
 
@@ -39,82 +48,121 @@ The system is designed for backtesting long-term asset allocation strategies (e.
 ```text
 project_root/
 ├── backend/
-│   ├── api.py           # FastAPI implementation and interactive Web UI (/ui)
-│   └── service.py       # Backtest service layer: Request/Result models and core orchestration
+│   ├── api.py              # FastAPI app and interactive Web UI (/ui)
+│   ├── service.py          # BacktestConfig / BacktestResult models and job orchestration
+│   └── assets_config.py    # Asset configuration manager (config/assets.json)
 │
-├── data/                # Raw asset data (CSV files named using sanitized asset names)
+├── data/                   # Raw per-asset CSV files (named by sanitized asset name)
 ├── data_processed/
-│   ├── aligned_assets.csv              # Global aligned price matrix (built from all configured assets)
-│   ├── configs/                        # Saved backtest configuration YAML files
-│   └── backtest_results.html           # Interactive Plotly charts generated from backtest runs
+│   ├── aligned_assets.csv  # Global aligned price matrix (all configured assets)
+│   ├── configs/            # Saved backtest configuration YAML files
+│   └── backtest_results.html  # Latest Plotly performance chart
 │
 ├── data_loader/
-│   ├── yahoo_downloader.py    # Incremental OHLCV downloader using yfinance
-│   ├── akshare_downloader.py  # Incremental OHLCV downloader using akshare
-│   └── data_processor.py      # Yield-to-price conversion and multi-asset alignment
+│   ├── yahoo_downloader.py    # Incremental OHLCV downloader (yfinance)
+│   ├── akshare_downloader.py  # Incremental OHLCV downloader (akshare, A-share assets)
+│   └── data_processor.py     # Yield-to-price engines and multi-asset alignment
 │
 ├── strategies/
-│   ├── backtest_engine.py      # Core simulation engine (Time loop + algorithm execution)
-│   ├── trend_models_template.py  # A template for trend_models.py
-│   └── algorithms_template.py  # A template for algorithms.py
+│   ├── backtest_engine.py       # Core simulation engine: time loop + bookkeeping only
+│   ├── algorithms_template.py   # Public template: how to write a custom rebalance function
+│   └── trend_models_template.py # Public template: how to implement a custom trend model
 │
 ├── utils/
-│   ├── decorators.py        # Generic decorators (e.g., @retry)
-│   └── tools.py             # Timezone and date utility functions
+│   ├── decorators.py   # Generic decorators (e.g., @retry)
+│   ├── naming.py       # Asset name sanitization helpers
+│   └── tools.py        # Timezone and date utility functions
 │
-├── logs/app.log             # System runtime logs
-├── logger.py                # Global logging configuration
-├── main_download.py         # Entry point: Data synchronization and processing
-├── main_backtest.py         # Entry point: CLI-based backtest execution
+├── config/
+│   └── assets.json     # Asset universe configuration
+│
+├── logger.py           # Global logging configuration
+├── main_download.py    # CLI entry point: data download and alignment
+├── main_backtest.py    # CLI entry point: backtest execution
 ├── requirements.txt
 └── README.md
 ```
+
+> **Note:** `strategies/algorithms.py` and `strategies/trend_models.py` are symlinks to
+> `.private_data/` and are not tracked by Git. Use the `*_template.py` files as
+> the public reference for the interface contracts.
+
+---
+
+## Architecture
+
+### Rebalance Interface (v2)
+
+The engine and strategy are fully decoupled via two dataclasses:
+
+```python
+# Engine → Strategy
+@dataclass
+class RebalanceContext:
+    current_units: np.ndarray   # units currently held  (n_assets,)
+    today_prices: np.ndarray    # prices today           (n_assets,)
+    cash_balance: float         # uninvested cash
+    fees: float                 # transaction fee rate
+    price_window: np.ndarray    # price history [lookback, n_assets]
+    returns_window: np.ndarray  # return history [lookback, n_assets]
+    trend_score: float          # ML model score ∈ [0,1]  (1.0 = no model)
+    model_threshold: float      # score threshold for safe-asset switch
+    top_k: int                  # max assets to hold simultaneously
+    target_volatility: float    # annualised vol target
+    max_leverage: float         # hard cap on gross exposure
+    safe_asset_indices: List[int]
+    col_names: List[str]
+
+# Strategy → Engine
+@dataclass
+class RebalanceResult:
+    new_units: np.ndarray  # target units after rebalance
+    new_cash: float        # remaining cash after trades & fees
+```
+
+`BacktestEngine` handles only the time loop, data windowing, ML score computation, and bookkeeping. **All trading decisions live inside `rebalance_fn`.**
+
+### Trend Model Interface
+
+The engine discovers the right method via `hasattr` in the following priority order:
+
+1. `predict_latest_score_from_matrix(matrix)` — preferred; receives full `[lookback, n_cols]` price matrix
+2. `predict_latest_score_from_series(close, us3m, us30y)` — single-asset signal models
+3. `predict_score(window_features)` — raw feature vector fallback
 
 ---
 
 ## Module Functionality
 
-### 1. `backend/`: API and Service Layer
+### `backend/service.py` — BacktestService
 
-#### `backend/service.py` (BacktestService Class)
+- **Algorithm Discovery**: Automatically discovers every `@staticmethod` whose name ends with `_rebalance` inside `RebalanceAlgorithms` via `inspect.getmembers`.
+- **Job Orchestration**: Resolves paths, instantiates `BacktestEngine`, and wraps results into `BacktestResult`.
+- **Key Config Fields** (`BacktestConfig`):
+  - `algorithm` — rebalance function name (default: `permanent_portfolio_rebalance`)
+  - `benchmark_cols` — benchmarks for chart and Alpha/Beta calculation (first entry is used for stats)
+  - `use_trend_model` / `trend_model_type` / `model_path` — optional ML trend overlay
+  - `top_k`, `target_volatility`, `max_leverage`, `safe_assets` — passed to `RebalanceContext`
 
-- **Algorithm Management**: Automatically discovers rebalancing strategies from the `algorithms` module.
-- **Job Execution**: Orchestrates the full backtest workflow, including path resolution, engine instantiation, and result aggregation.
-- **Models**: Defines `BacktestConfig` and `BacktestResult` using Pydantic for robust data validation.
+### `backend/api.py` — REST Endpoints
 
-#### `backend/api.py` (APIManager Class)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/algorithms` | List auto-discovered rebalance strategies |
+| `GET` | `/api/trend_models` | List available persisted model files (`.pkl` / `.pt`) |
+| `GET` | `/api/assets` | List configured assets with local data status |
+| `POST` | `/api/assets` | Create an asset configuration |
+| `PUT` | `/api/assets/{name}` | Update an asset configuration |
+| `DELETE` | `/api/assets/{name}` | Delete an asset configuration |
+| `POST` | `/api/assets/download` | Incremental download for selected assets (60s cooldown) |
+| `POST` | `/api/assets/process` | Rebuild `aligned_assets.csv` from all configured assets |
+| `POST` | `/api/backtest` | Run a backtest and return stats + chart URL |
 
-- **Web Interface**: Provides an interactive dashboard at `/ui` using Tailwind CSS.
-- **REST Endpoints**:
-  - `GET /api/algorithms`: Lists available rebalancing strategies.
-  - `GET /api/assets`: Retrieves configured assets and their local data availability.
-  - `POST /api/assets`: Creates an asset configuration.
-  - `PUT /api/assets/{name}`: Updates an asset configuration.
-  - `DELETE /api/assets/{name}`: Deletes an asset configuration.
-  - `POST /api/assets/download`: Incrementally downloads raw CSV data for selected assets (60s cooldown).
-  - `POST /api/assets/process`: Processes and aligns data for all configured assets into `data_processed/aligned_assets.csv`.
-  - `POST /api/backtest`: Executes backtest simulations synchronously.
+### `data_loader/data_processor.py` — DataProcessor
 
----
-
-### 2. `data_loader/`: ETL Pipeline
-
-#### `data_loader/yahoo_downloader.py` (YahooIncrementalLoader Class)
-
-- **Incremental Sync**: Each asset is stored as `data/<sanitized_name>.csv`. The downloader reads local history and only requests the missing date range from Yahoo Finance.
-- **Column Normalization**: Standardizes yfinance output into consistent OHLCV columns (`Open`, `High`, `Low`, `Close`, `Volume`) and fills common gaps (e.g., zero/NaN OHLC using `Close`).
-- **Batch Mode**: `download_batch(assets, start_year=1985)` respects per-asset `initial_start_date` when provided, otherwise falls back to `start_year`.
-
-#### `data_loader/data_processor.py` (DataProcessor Class)
-
-- **Yield-to-Price Engines**:
-  - `bond_pricing_engine`: Converts yield series into a synthetic total return price series (duration-based approximation).
-  - `cash_pricing_engine`: Converts short-rate yields into a cash-like cumulative return series.
-- **Alignment Strategy**:
-  - Builds a multi-asset price matrix in-memory.
-  - Drops only dates where *all* assets are missing (`dropna(how="all")`), preserving partial-missing dates.
-  - Final date-range trimming for a specific backtest run is deferred to the backtest layer based on the selected asset subset.
-- **Persistence**: `process_and_align(...)` writes the aligned matrix to `data_processed/aligned_assets.csv`.
+- **`bond_pricing_engine`**: Converts a yield series to a synthetic total-return price series using a duration-based approximation.
+- **`cash_pricing_engine`**: Converts a short-rate yield series to a cumulative cash return series.
+- **Alignment**: Builds the price matrix with `dropna(how="all")`, preserving partial-data dates. Final trimming is deferred to the backtest layer.
 
 ---
 
@@ -139,28 +187,33 @@ pip install -r requirements.txt
 
 ### 1. Data Setup
 
-1. Configure assets via Web UI (**Assets Management**) or by editing `config/assets.json`.
-2. Download / update raw data:
+1. Configure assets via the Web UI (**Assets Management** tab) or by editing `config/assets.json` directly.
+2. Download raw data:
 
-   - Via Web UI:
-     - Select assets in the Assets table and click **Download Data** (calls `POST /api/assets/download`).
-   - Via CLI:
-
-     ```bash
-     python main_download.py
-     ```
+   ```bash
+   python main_download.py
+   # or via Web UI → select assets → Download Data
+   ```
 
 3. Process and align data:
 
-   - Via Web UI:
-     - Click **Process Data** to rebuild `data_processed/aligned_assets.csv` from all configured assets (calls `POST /api/assets/process`).
+   ```bash
+   # Via Web UI → Process Data
+   # (always rebuilds aligned_assets.csv from all assets in config/assets.json)
+   ```
 
-### 2. Running Simulations
+### 2. Running a Backtest
+
+#### Via Web UI
 
 ```bash
-mv strategies/algorithms_template.py strategies/algorithms.py
-mv strategies/trend_models_template.py strategies/trend_models.py
+python backend/api.py
+# open http://127.0.0.1:8000/ui
 ```
+
+Configure parameters and click **Run Backtest**.
+
+![ui](./assets/ui.png)
 
 #### Via CLI
 
@@ -168,26 +221,35 @@ mv strategies/trend_models_template.py strategies/trend_models.py
 python main_backtest.py
 ```
 
-#### Via Web UI
+### 3. Adding a Custom Strategy
 
-1. Start the server:
+Create a static method ending in `_rebalance` in `strategies/algorithms.py`. It will be auto-discovered and appear in the UI dropdown immediately on next server start.
 
-   ```bash
-   python backend/api.py
-   ```
+See `strategies/algorithms_template.py` for the full interface specification and a runnable example stub.
 
-2. Navigate to `http://127.0.0.1:8000/ui`.
-3. (Optional) Download / process data.
-4. Configure parameters and click **Run Backtest**.
+```python
+from strategies.algorithms import RebalanceAlgorithms, RebalanceContext, RebalanceResult
 
-![ui](./assets/ui.png)
+class MyAlgorithms:
+    @staticmethod
+    def my_strategy_rebalance(ctx: RebalanceContext) -> RebalanceResult:
+        # ... your logic here ...
+        return RebalanceAlgorithms.permanent_portfolio_rebalance(ctx)  # delegate or replace
+```
+
+### 4. Adding a Custom Trend Model
+
+Subclass `TrendModelBase` in `strategies/trend_models.py` and implement at least `predict_score`. For full matrix input, also implement `predict_latest_score_from_matrix`.
+
+See `strategies/trend_models_template.py` for the interface contract and a minimal example.
 
 ---
 
 ## FAQ
 
-- **Rate Limiting**: The Yahoo Finance downloader is subject to API rate limits. The system implements a 60-second cooldown on the download endpoint.
-- **Processing vs Selection**:
-  - `Download Data` operates on selected assets.
-  - `Process Data` always rebuilds `aligned_assets.csv` from *all* assets in `config/assets.json`.
-- **Adding Algorithms**: New strategies can be added as static methods ending in `_rebalance` within `strategies/algorithms.py`. They will be automatically detected by the system.
+- **Rate Limiting**: The Yahoo Finance downloader is subject to API rate limits. The system enforces a 60-second cooldown on the `POST /api/assets/download` endpoint.
+- **`Download Data` vs `Process Data`**:
+  - `Download Data` operates only on the assets you have selected in the UI.
+  - `Process Data` always rebuilds `aligned_assets.csv` from *all* assets defined in `config/assets.json`.
+- **`algorithms.py` not found**: The file is a symlink to `.private_data/algorithms.py` and is not tracked by Git. Use `strategies/algorithms_template.py` as a starting point and place your implementation in `.private_data/algorithms.py`.
+- **Supported Trend Model Types**: `kmeans_simple`, `kmeans_window`, `random_forest`, `torch_mlp`.

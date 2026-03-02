@@ -1,6 +1,6 @@
 import os
 import traceback
-from typing import List, Optional
+from typing import List, Optional, Callable
 from strategies.backtest_engine import BacktestEngine
 from strategies.algorithms import RebalanceAlgorithms
 from logger import logger
@@ -19,30 +19,53 @@ class BacktestRunner:
         data_file: str, 
         output_dir: str, 
         initial_capital: float = 100000.0,
-        fees: float = 0.0005,
-        rebalance_freq: str = 'QE'
+        fees: float = 0.0005
     ) -> None:
         """Initialize the backtest runner with configuration settings."""
         self.data_file: str = data_file
         self.output_dir: str = output_dir
         self.initial_capital: float = initial_capital
         self.fees: float = fees
-        self.rebalance_freq: str = rebalance_freq
 
     def run(
         self, 
         start_date: Optional[str] = '2017-01-01', 
         end_date: Optional[str] = '2026-02-05',
         benchmarks: Optional[List[str]] = None,
-        rebalance_fn = RebalanceAlgorithms.permanent_portfolio_rebalance,
+        rebalance_fn: Optional[Callable] = None,
         use_trend_model: bool = False,
         model_lookback_days: int = 60,
-        model_threshold: float = 0.5,
-        model_type: str = "kmeans",
+        model_threshold: float = 0.35,
+        model_type: str = "torch_mlp",
+        model_path: Optional[str] = None,
+        top_k: int = 3,
+        target_volatility: float = 0.15,
+        vol_lookback: int = 60,
+        max_leverage: float = 1.0,
+        safe_assets: Optional[List[str]] = None,
     ) -> None:
-        """Execute the backtest and generate results."""
+        """Execute the backtest and generate results.
+
+        Args:
+            start_date: Backtest start date (YYYY-MM-DD).
+            end_date: Backtest end date (YYYY-MM-DD).
+            benchmarks: List of benchmark column names for comparison plot.
+            rebalance_fn: Callable ``(ctx: RebalanceContext) -> RebalanceResult``
+                that implements the trading strategy.  Defaults to
+                ``momentum_volatility_rebalance`` when None.
+            use_trend_model: Whether to activate the ML trend overlay.
+            model_lookback_days: Lookback window fed to the trend model.
+            model_threshold: Trend score threshold for risk-off switching.
+            model_type: Trend model flavour identifier string.
+            model_path: Path to the persisted model file.
+            top_k: Maximum assets to hold simultaneously.
+            target_volatility: Target annualised portfolio volatility.
+            vol_lookback: Lookback window for momentum / covariance estimation.
+            max_leverage: Hard cap on gross portfolio exposure.
+            safe_assets: Assets to hold during risk-off periods.
+        """
         if benchmarks is None:
-            benchmarks = ['Nasdaq100', 'GoldIndex', 'US30Y', 'US3M']
+            benchmarks = ['Nasdaq100', 'GoldIndex', 'US30Y', 'US3M', 'SP500']
 
         if not os.path.exists(self.data_file):
             logger.error(f"Data file not found: {self.data_file}")
@@ -56,19 +79,23 @@ class BacktestRunner:
             engine.run_backtest(
                 start_date=start_date, 
                 end_date=end_date,
-                rebalance_freq=self.rebalance_freq, 
                 fees=self.fees,
                 rebalance_fn=rebalance_fn,
-                rebalance_interval_days=None,
-                asset_cols=None,
+                candidate_assets=None,
                 use_trend_model=use_trend_model,
                 model_lookback_days=model_lookback_days,
                 model_threshold=model_threshold,
                 model_type=model_type,
+                model_path=model_path,
+                top_k=top_k,
+                target_volatility=target_volatility,
+                vol_lookback=vol_lookback,
+                max_leverage=max_leverage,
+                safe_assets=safe_assets,
             )
             
             # 3. Output Performance Statistics
-            stats = engine.get_performance_stats()
+            stats = engine.get_performance_stats(benchmark_col="SP500")
             if not stats:
                 logger.warning("No statistics generated. Please check the date range and data availability.")
                 return
@@ -81,8 +108,15 @@ class BacktestRunner:
             print(f"Sharpe Ratio:    {stats['Sharpe Ratio']:.2f}")
             print(f"Max Drawdown:    {stats['Max Drawdown']*100:.2f}%")
             print(f"Volatility:      {stats['Volatility']*100:.2f}%")
+            print(f"Alpha:           {stats['Alpha']*100:.2f}%")
+            print(f"Beta:            {stats['Beta']:.2f}")
+            print(f"Info Ratio:      {stats['Information Ratio']:.2f}")
+            print(f"Calmar Ratio:    {stats['Calmar Ratio']:.2f}")
+            print(f"Max Recovery:    {stats['Max Recovery Days']} days")
+            print(f"Win Rate:        {stats['Win Rate']*100:.2f}%")
+            print(f"P/L Ratio:       {stats['P/L Ratio']:.2f}")
             print("="*50 + "\n")
-            
+
             # 4. Generate Visualization
             saved_path = engine.plot_results(
                 output_dir=self.output_dir, 
@@ -107,22 +141,43 @@ if __name__ == "__main__":
         data_file=DATA_PATH,
         output_dir=OUTPUT_PATH,
         initial_capital=100000.0,
-        fees=0.0005,
-        rebalance_freq='QE'
+        fees=0.0005
     )
     
-    # 示例1：不开启趋势模型（保持原行为）
-    # runner.run(
-    #     start_date='2017-01-01',
-    #     end_date='2026-02-05',
-    # )
-
-    # 示例2：开启趋势模型占位逻辑
+    # 示例1：双动量+目标波动率策略，不开趋势模型
+    print("=== TEST 1: momentum_volatility (no trend model) ===")
     runner.run(
         start_date='2017-01-01',
         end_date='2026-02-05',
+        rebalance_fn=RebalanceAlgorithms.momentum_volatility_rebalance,
+        use_trend_model=False,
+        top_k=3,
+        target_volatility=0.15,
+        vol_lookback=60,
+    )
+
+    # 示例2：双动量+目标波动率策略，开启 Torch MLP 趋势模型以避免熊市回撤
+    print("=== TEST 2: momentum_volatility + Torch MLP model ===")
+    runner.run(
+        start_date='2017-01-01',
+        end_date='2026-02-05',
+        rebalance_fn=RebalanceAlgorithms.momentum_volatility_rebalance,
         use_trend_model=True,
         model_lookback_days=60,
-        model_threshold=0.6,
-        model_type="hmm",
+        model_threshold=0.35,
+        model_type="torch_mlp",
+        model_path=None,  # Set to your model path, e.g. ".private_data/models/my_model.pt"
+        top_k=3,
+        target_volatility=0.15,
+        vol_lookback=60,
+        safe_assets=["US30Y", "GoldIndex", "US3M"],
+    )
+
+    # 示例3：永久组合策略（等权重）
+    print("=== TEST 3: permanent_portfolio (equal weight) ===")
+    runner.run(
+        start_date='2017-01-01',
+        end_date='2026-02-05',
+        rebalance_fn=RebalanceAlgorithms.permanent_portfolio_rebalance,
+        use_trend_model=False,
     )

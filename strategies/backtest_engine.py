@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Dict, Union, Optional, List, Callable
 from logger import logger
 
-from strategies.algorithms import RebalanceAlgorithms
+from strategies.algorithms import RebalanceAlgorithms, RebalanceContext, RebalanceResult
 
 
 class BacktestEngine:
@@ -34,163 +34,90 @@ class BacktestEngine:
             logger.error(f"Failed to load data: {str(e)}")
             raise
 
-    @staticmethod
-    def _risk_leverage_from_score(
-        trend_score: float,
-        score_lo: float,
-        score_hi: float,
-        leverage_min: float,
-        leverage_max: float,
-    ) -> float:
-        """Map trend score in [0, 1] to a leverage value in [leverage_min, leverage_max]."""
-        score = float(np.clip(trend_score, 0.0, 1.0))
-        lev_min = float(np.clip(leverage_min, 0.0, 1.0))
-        lev_max = float(np.clip(leverage_max, 0.0, 1.0))
-        if lev_max < lev_min:
-            lev_min, lev_max = lev_max, lev_min
-
-        lo = float(np.clip(score_lo, 0.0, 1.0))
-        hi = float(np.clip(score_hi, 0.0, 1.0))
-        if hi <= lo:
-            return lev_max if score >= hi else lev_min
-
-        t = (score - lo) / (hi - lo)
-        t = float(np.clip(t, 0.0, 1.0))
-        return lev_min + t * (lev_max - lev_min)
-
-    @staticmethod
-    def _compute_intragroup_weights(
-        rebalance_fn: Callable,
-        group_units: np.ndarray,
-        group_prices: np.ndarray,
-        max_tilt: float,
-        group_signals: Optional[np.ndarray],
-    ) -> np.ndarray:
-        """Infer within-group target weights from the selected rebalance function."""
-        n_assets = len(group_prices)
-        if n_assets == 0:
-            return np.array([])
-
-        group_val = float(np.sum(group_units * group_prices))
-        if group_val <= 0:
-            return np.full(n_assets, 1.0 / n_assets)
-
-        is_signal_weighted = rebalance_fn is RebalanceAlgorithms.signal_weighted_rebalance
-        if is_signal_weighted:
-            if group_signals is None or len(group_signals) != n_assets:
-                return np.full(n_assets, 1.0 / n_assets)
-            new_units, _ = rebalance_fn(
-                current_units=group_units,
-                prices=group_prices,
-                fees=0.0,
-                signals=group_signals,
-                max_tilt=max_tilt,
-            )
-        else:
-            new_units, _ = rebalance_fn(
-                current_units=group_units,
-                prices=group_prices,
-                fees=0.0,
-            )
-
-        target_vals = np.clip(new_units * group_prices, 0.0, None)
-        total = float(target_vals.sum())
-        if total <= 0:
-            return np.full(n_assets, 1.0 / n_assets)
-        return target_vals / total
-
-    @staticmethod
-    def _compute_safe_group_weights(
-        safe_asset_names: List[str],
-        safe_allocation_mode: str,
-        safe_fixed_weights: Optional[Dict[str, float]],
-        safe_single_asset: Optional[str],
-    ) -> np.ndarray:
-        """Build within-safe-bucket weights based on selected allocation mode."""
-        n_assets = len(safe_asset_names)
-        if n_assets == 0:
-            return np.array([])
-
-        mode = (safe_allocation_mode or "equal_weight").strip().lower()
-        if mode == "equal_weight":
-            return np.full(n_assets, 1.0 / n_assets)
-
-        if mode == "single_asset":
-            selected = safe_single_asset or safe_asset_names[0]
-            if selected not in safe_asset_names:
-                raise RuntimeError(
-                    "safe_single_asset must be one of safe_asset_cols. "
-                    f"Got '{selected}', safe_asset_cols={safe_asset_names}"
-                )
-            weights = np.zeros(n_assets, dtype=float)
-            weights[safe_asset_names.index(selected)] = 1.0
-            return weights
-
-        if mode == "fixed_weight":
-            weights_map = safe_fixed_weights or {}
-            unknown = sorted(set(weights_map.keys()) - set(safe_asset_names))
-            if unknown:
-                raise RuntimeError(
-                    "safe_fixed_weights contains assets not in safe_asset_cols: "
-                    f"{unknown}"
-                )
-
-            values = np.array(
-                [float(weights_map.get(name, 0.0)) for name in safe_asset_names],
-                dtype=float,
-            )
-            if np.any(values < 0):
-                raise RuntimeError("safe_fixed_weights cannot contain negative values.")
-            total = float(values.sum())
-            if total <= 0:
-                raise RuntimeError(
-                    "safe_fixed_weights total must be > 0 for fixed_weight mode."
-                )
-            return values / total
-
-        raise RuntimeError(
-            "Unsupported safe_allocation_mode. "
-            "Use 'equal_weight', 'fixed_weight', or 'single_asset'."
-        )
-
     def run_backtest(
         self,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        rebalance_freq: str = "QE",
         fees: float = 0.0005,
-        rebalance_fn: Callable = RebalanceAlgorithms.permanent_portfolio_rebalance,
-        rebalance_interval_days: Optional[int] = None,
-        asset_cols: Optional[List[str]] = None,
+        rebalance_fn: Optional[Callable] = None,
+        rebalance_interval_days: int = 30,
+        candidate_assets: Optional[List[str]] = None,
         use_trend_model: bool = False,
         model_lookback_days: int = 60,
         model_threshold: float = 0.5,
         model_type: str = "kmeans_simple",
         model_path: Optional[str] = None,
-        max_tilt: float = 0.1,
-        risk_asset_cols: Optional[List[str]] = None,
-        safe_asset_cols: Optional[List[str]] = None,
-        safe_allocation_mode: str = "equal_weight",
-        safe_fixed_weights: Optional[Dict[str, float]] = None,
-        safe_single_asset: Optional[str] = None,
-        risk_leverage_enabled: bool = False,
-        risk_leverage_min: float = 0.2,
-        risk_leverage_max: float = 1.0,
-        risk_leverage_score_lo: float = 0.2,
-        risk_leverage_score_hi: float = 0.8,
+        top_k: int = 3,
+        target_volatility: float = 0.10,
+        vol_lookback: int = 60,
+        max_leverage: float = 1.0,
+        safe_assets: Optional[List[str]] = None,
     ) -> None:
-        """Execute the backtest simulation."""
+        """Execute the backtest simulation by delegating trade logic to ``rebalance_fn``.
+
+        BacktestEngine is responsible **only** for:
+        - Slicing and pre-processing data for the requested date range.
+        - Loading and validating the optional ML trend model.
+        - Iterating through trading days (the Time Loop).
+        - On rebalance days: gathering context (prices, returns windows, trend
+          score) and delegating weight/unit decisions to ``rebalance_fn``.
+        - Applying the returned unit positions and recording portfolio history.
+
+        All trading-strategy logic lives inside ``rebalance_fn``.  If
+        ``rebalance_fn`` is None the engine falls back to
+        :meth:`~strategies.algorithms.RebalanceAlgorithms.permanent_portfolio_rebalance`
+        (equal-weight), which matches the default algorithm exposed by
+        ``BacktestConfig`` in the backend service.
+
+        Args:
+            start_date: ISO date string for backtest start (inclusive).  If
+                None, uses the first available date in the data.
+            end_date: ISO date string for backtest end (inclusive).  If None,
+                uses the last available date in the data.
+            fees: Per-trade transaction fee as a fraction of traded value
+                (e.g. 0.0005 for 5 bps).
+            rebalance_fn: Callable with signature
+                ``(ctx: RebalanceContext) -> RebalanceResult``.
+                Receives all market context and returns target positions.
+            rebalance_interval_days: Number of calendar days between
+                consecutive rebalance events (e.g. 30 for monthly).
+            candidate_assets: Optional list of column names to restrict the
+                asset universe; if None all columns are used.
+            use_trend_model: Whether to activate the ML trend overlay model.
+            model_lookback_days: Number of past days fed to the trend model as
+                its feature window.
+            model_threshold: Trend score threshold passed to ``rebalance_fn``
+                via :class:`~strategies.algorithms.RebalanceContext`.
+            model_type: Identifier string for the trend model flavour.
+            model_path: Optional path to a persisted model file (.pkl / .pt).
+            top_k: Maximum number of assets to select; forwarded to
+                ``RebalanceContext``.
+            target_volatility: Target annualised portfolio volatility;
+                forwarded to ``RebalanceContext``.
+            vol_lookback: Lookback window (days) for momentum and covariance
+                estimation; forwarded to ``RebalanceContext``.
+            max_leverage: Hard cap on gross exposure; forwarded to
+                ``RebalanceContext``.
+            safe_assets: Column names of safe-haven assets to hold during
+                risk-off periods; forwarded to ``RebalanceContext``.
+        """
         logger.info(
             f"Preparing simulation for range: {start_date or 'Start'} to {end_date or 'End'}..."
         )
         logger.info(
-            f"BacktestEngine.run_backtest params | use_trend_model={use_trend_model}, "
-            f"model_type={model_type}, model_lookback_days={model_lookback_days}, "
-            f"model_threshold={model_threshold}, max_tilt={max_tilt}, "
-            f"risk_leverage_enabled={risk_leverage_enabled}, "
-            f"safe_allocation_mode={safe_allocation_mode}"
+            f"BacktestEngine.run_backtest params | rebalance_fn={getattr(rebalance_fn, '__name__', rebalance_fn)}, "
+            f"top_k={top_k}, target_volatility={target_volatility:.2f}, "
+            f"vol_lookback={vol_lookback}, max_leverage={max_leverage:.2f}"
         )
 
+        # Default strategy: use equal-weight, matching BacktestConfig.algorithm default.
+        if rebalance_fn is None:
+            rebalance_fn = RebalanceAlgorithms.permanent_portfolio_rebalance
+            logger.info(
+                "rebalance_fn not provided; defaulting to permanent_portfolio_rebalance (equal-weight)."
+            )
+
+        # ── Load optional ML trend model ───────────────────────────────────────
         trend_model = None
         if use_trend_model:
             from strategies.trend_models import get_trend_model
@@ -204,7 +131,7 @@ class BacktestEngine:
             logger.error("No data available for backtest.")
             return
 
-        # 1. Slice Data (Time Filtering)
+        # ── 1. Slice & pre-process data ────────────────────────────────────────
         df_slice = self.data.copy()
         if start_date:
             df_slice = df_slice.loc[start_date:]
@@ -215,25 +142,16 @@ class BacktestEngine:
             logger.error("No data found for the specified date range!")
             return
 
-        # Optionally restrict to a subset of asset columns (strategy asset universe)
-        if asset_cols:
-            missing = [c for c in asset_cols if c not in df_slice.columns]
+        if candidate_assets:
+            missing = [c for c in candidate_assets if c not in df_slice.columns]
             if missing:
                 raise RuntimeError(f"Missing asset columns in data: {missing}")
-            df_slice = df_slice[asset_cols]
+            df_slice = df_slice[candidate_assets]
+        else:
+            df_slice = df_slice.dropna(axis=1, how="all")
 
-        # 在策略资产子集上做严格裁剪，丢弃含 NaN 的日期，
-        # 避免全局对齐矩阵中的短历史资产影响其它资产的可用区间。
-        before_rows = len(df_slice)
-        df_slice = df_slice.dropna(how="any")
-        after_rows = len(df_slice)
-        if df_slice.empty:
-            logger.error("No data left after dropping NaNs for selected assets!")
-            return
-        if after_rows < before_rows:
-            logger.info(
-                f"Dropped {before_rows - after_rows} rows with NaNs for selected strategy assets."
-            )
+        df_slice = df_slice.dropna(how="all").ffill().bfill()
+        data_filled = self.data.ffill().bfill()
 
         actual_start = df_slice.index[0].strftime("%Y-%m-%d")
         actual_end = df_slice.index[-1].strftime("%Y-%m-%d")
@@ -241,7 +159,7 @@ class BacktestEngine:
             f"Actual Backtest Range: {actual_start} to {actual_end} ({len(df_slice)} days)"
         )
 
-        # === 若使用 kmeans_window, 先基于训练时的 feature_cols 校验列名一致性 ===
+        # Validate trend model feature columns against loaded data
         trend_feature_cols: Optional[List[str]] = None
         if use_trend_model and trend_model is not None and hasattr(trend_model, "feature_cols"):
             trend_feature_cols = getattr(trend_model, "feature_cols") or None
@@ -249,249 +167,136 @@ class BacktestEngine:
                 missing_feat = [c for c in trend_feature_cols if c not in self.data.columns]
                 if missing_feat:
                     raise RuntimeError(
-                        "当前 aligned_assets.csv 缺少模型训练所需列: "
-                        f"{missing_feat}. 请使用相同列集合重新训练该模型, "
-                        "或选择与当前数据匹配的模型文件。"
+                        "aligned_assets.csv is missing columns required by the trend model: "
+                        f"{missing_feat}. Re-train the model with the current data columns, "
+                        "or select a model file that matches the current dataset."
                     )
                 logger.info(
-                    f"Trend model feature_cols validated against data columns: {trend_feature_cols}"
+                    f"Trend model feature_cols validated: {trend_feature_cols}"
                 )
 
-        # 2. Setup Variables
+        # ── 2. Setup arrays ────────────────────────────────────────────────────
         prices = df_slice.values
         dates = df_slice.index
         n_days, n_assets = prices.shape
-        asset_names = list(df_slice.columns)
-        name_to_idx = {name: idx for idx, name in enumerate(asset_names)}
+        col_names: List[str] = list(df_slice.columns)
 
-        # Resolve risk/safe buckets. If both are empty, all strategy assets are treated as risk.
-        risk_input = list(dict.fromkeys(risk_asset_cols or []))
-        safe_input = list(dict.fromkeys(safe_asset_cols or []))
-        all_bucket_cols = set(risk_input + safe_input)
-        missing_bucket_cols = [c for c in all_bucket_cols if c not in name_to_idx]
-        if missing_bucket_cols:
-            raise RuntimeError(
-                f"Risk/Safe bucket columns are not in strategy assets: {missing_bucket_cols}"
-            )
-        overlap_cols = sorted(set(risk_input).intersection(set(safe_input)))
-        if overlap_cols:
-            raise RuntimeError(
-                f"Assets cannot be in both risk and safe buckets: {overlap_cols}"
-            )
+        returns_arr = df_slice.pct_change(fill_method=None).fillna(0).values
 
-        if not risk_input and not safe_input:
-            risk_indices = list(range(n_assets))
-            safe_indices: List[int] = []
-        else:
-            risk_indices = [name_to_idx[c] for c in risk_input]
-            safe_indices = [name_to_idx[c] for c in safe_input]
-            assigned = set(risk_indices + safe_indices)
-            unassigned = [idx for idx in range(n_assets) if idx not in assigned]
-            if unassigned:
-                # Keep behavior robust: any strategy assets not explicitly bucketed default to risk.
-                risk_indices.extend(unassigned)
-                logger.info(
-                    "Some strategy assets are not bucketed and will default to risk assets: "
-                    f"{[asset_names[j] for j in unassigned]}"
-                )
+        interval = rebalance_interval_days if rebalance_interval_days and rebalance_interval_days > 0 else 30
+        rb_indices = set(range(0, n_days, interval))
 
-        if risk_leverage_enabled and not use_trend_model:
-            logger.warning(
-                "risk_leverage_enabled=True but use_trend_model=False. "
-                "Leverage will remain at max (no score-based reduction)."
-            )
+        # Pre-compute safe asset index positions (relative to candidate universe)
+        safe_asset_indices: List[int] = []
+        if safe_assets:
+            for col in safe_assets:
+                if col in col_names:
+                    safe_asset_indices.append(col_names.index(col))
 
-        safe_asset_names = [asset_names[j] for j in safe_indices]
-        safe_group_weights = self._compute_safe_group_weights(
-            safe_asset_names=safe_asset_names,
-            safe_allocation_mode=safe_allocation_mode,
-            safe_fixed_weights=safe_fixed_weights,
-            safe_single_asset=safe_single_asset,
-        )
+        # Minimum warm-up period before first rebalance
+        warmup = max(model_lookback_days if use_trend_model else 0, vol_lookback)
 
-        # Identify rebalance indices
-        if rebalance_interval_days is not None and rebalance_interval_days > 0:
-            rb_indices = set(range(0, n_days, rebalance_interval_days))
-        else:
-            rb_dates = df_slice.index.to_series().resample(rebalance_freq).last().index
-            rb_indices = set(df_slice.index.get_indexer(rb_dates, method="ffill"))
-
-        # 3. Initialization
+        # ── 3. Initialise portfolio ────────────────────────────────────────────
         portfolio_history = np.zeros(n_days)
         weights_history = np.zeros((n_days, n_assets))
+        current_units = np.zeros(n_assets)
+        cash_balance = self.initial_capital
 
-        start_prices = prices[0]
-        target_allocation = self.initial_capital / n_assets
-        current_units = (target_allocation / start_prices) * (1 - fees)
-        initial_invested = float(np.sum(current_units * start_prices))
-        cash_balance = self.initial_capital - initial_invested
-        portfolio_history[0] = initial_invested + cash_balance
-        weights_history[0] = (current_units * start_prices) / portfolio_history[0]
-
-        # 4. Time Loop
-        for i in range(1, n_days):
+        # ── 4. Time Loop ───────────────────────────────────────────────────────
+        for i in range(n_days):
             today_prices = prices[i]
             current_asset_vals = current_units * today_prices
             current_val = float(np.sum(current_asset_vals) + cash_balance)
 
             if i in rb_indices:
-                signals = None
+                # Skip rebalance until warm-up period has elapsed
+                if i < warmup:
+                    portfolio_history[i] = current_val
+                    weights_history[i] = (
+                        current_asset_vals / current_val
+                        if current_val > 0
+                        else np.zeros(n_assets)
+                    )
+                    continue
+
+                # ── Compute ML trend score ─────────────────────────────────────
                 trend_score = 1.0
-
-                if use_trend_model and model_lookback_days > 0 and trend_model is not None:
-                    if i < model_lookback_days:
-                        portfolio_history[i] = current_val
-                        weights_history[i] = (
-                            (current_units * today_prices) / current_val
-                            if current_val > 0
-                            else np.zeros(n_assets)
-                        )
-                        continue
-
+                if use_trend_model and trend_model is not None and model_lookback_days > 0:
                     window = df_slice.iloc[i - model_lookback_days : i]
-                    if window.empty:
-                        portfolio_history[i] = current_val
-                        weights_history[i] = (
-                            (current_units * today_prices) / current_val
-                            if current_val > 0
-                            else np.zeros(n_assets)
-                        )
-                        continue
-
-                    window_arr = window.values.astype(float)
-
-                    # === 统一计算全局趋势分数 ===
-                    if trend_feature_cols:
-                        # 按模型训练时的 feature_cols 从全局数据中取出对应列的窗口
-                        # 注意: 使用 self.data 而非 df_slice, 避免策略资产子集影响特征列选择
-                        full_window = self.data.loc[window.index, trend_feature_cols].dropna(how="any")
-                        if full_window.empty or len(full_window) < model_lookback_days:
-                            trend_score = 0.5
-                        else:
-                            # 使用多列矩阵接口, 复刻训练时多列拼特征的逻辑
-                            mat = full_window.values.astype(float)
-                            if hasattr(trend_model, "predict_latest_score_from_matrix"):
-                                trend_score = float(
-                                    trend_model.predict_latest_score_from_matrix(mat)
-                                )
-                            else:
-                                # 兼容性兜底: 退回单列接口
-                                close_series = full_window.iloc[:, 0].values.astype(float)
-                                trend_score = float(
-                                    trend_model.predict_latest_score_from_series(
-                                        close=close_series
+                    if not window.empty:
+                        if trend_feature_cols:
+                            full_window = data_filled.loc[
+                                window.index, trend_feature_cols
+                            ].dropna(how="any")
+                            if (
+                                not full_window.empty
+                                and len(full_window) >= model_lookback_days
+                            ):
+                                mat = full_window.values.astype(float)
+                                if hasattr(
+                                    trend_model, "predict_latest_score_from_matrix"
+                                ):
+                                    trend_score = float(
+                                        trend_model.predict_latest_score_from_matrix(mat)
                                     )
+                                else:
+                                    close_series = full_window.iloc[:, 0].values.astype(
+                                        float
+                                    )
+                                    trend_score = float(
+                                        trend_model.predict_latest_score_from_series(
+                                            close=close_series
+                                        )
+                                    )
+                        elif hasattr(trend_model, "predict_latest_score_from_series"):
+                            close_series = window.iloc[:, 0].values.astype(float)
+                            trend_score = float(
+                                trend_model.predict_latest_score_from_series(
+                                    close=close_series
                                 )
-                    elif hasattr(trend_model, "predict_latest_score_from_series"):
-                        # 兼容旧模型: 使用策略资产子集的第一列作为趋势判断基准
-                        close_series = window.iloc[:, 0].values.astype(float)
-                        trend_score = float(
-                            trend_model.predict_latest_score_from_series(
-                                close=close_series
                             )
-                        )
-                    else:
-                        # 兼容更旧的简单模型(直接基于价格矩阵打分)
-                        trend_score = float(trend_model.predict_score(window_arr))
-
-                    trend_score = max(0.0, min(1.0, trend_score))
+                        else:
+                            trend_score = float(
+                                trend_model.predict_score(window.values.astype(float))
+                            )
                     logger.info(
-                        f"Trend model | day_idx={i}, lookback={model_lookback_days}, "
-                        f"score={trend_score:.3f}, model_type={model_type}"
+                        f"Rebalance | idx={i}, Market Trend Score {trend_score:.3f}"
                     )
-                    if trend_score < model_threshold and not risk_leverage_enabled:
-                        logger.info(
-                            f"Rebalance skipped at index {i} due to low trend_score={trend_score:.3f} "
-                            f"(threshold={model_threshold:.3f})"
-                        )
-                        portfolio_history[i] = current_val
-                        weights_history[i] = (
-                            (current_units * today_prices) / current_val
-                            if current_val > 0
-                            else np.zeros(n_assets)
-                        )
-                        continue
 
-                    # 每个资产的信号, 供信号加权算法使用
-                    signals = trend_model.predict_asset_scores(window_arr)
+                # ── Build price / return windows for the rebalance function ────
+                lookback_start = max(0, i - vol_lookback)
+                price_window = prices[lookback_start:i]    # [lookback, n_assets]
+                returns_window = returns_arr[lookback_start:i]  # [lookback, n_assets]
 
-                # Risk leverage controls total risk-bucket exposure.
-                risk_budget = 1.0
-                safe_budget = 0.0
-                if risk_leverage_enabled:
-                    risk_budget = self._risk_leverage_from_score(
-                        trend_score=trend_score,
-                        score_lo=risk_leverage_score_lo,
-                        score_hi=risk_leverage_score_hi,
-                        leverage_min=risk_leverage_min,
-                        leverage_max=risk_leverage_max,
-                    )
-                    if safe_indices:
-                        safe_budget = max(0.0, 1.0 - risk_budget)
-                    else:
-                        safe_budget = 0.0
-
-                # If only safe bucket exists, allocate all investable capital to safe bucket.
-                if not risk_indices and safe_indices:
-                    risk_budget = 0.0
-                    safe_budget = 1.0
-
-                # Compose target weights (cash is the residual: 1 - sum(target_weights)).
-                target_weights = np.zeros(n_assets)
-                if risk_indices and risk_budget > 0:
-                    risk_signals = (
-                        np.asarray(signals)[risk_indices]
-                        if signals is not None
-                        else None
-                    )
-                    risk_group_weights = self._compute_intragroup_weights(
-                        rebalance_fn=rebalance_fn,
-                        group_units=current_units[risk_indices],
-                        group_prices=today_prices[risk_indices],
-                        max_tilt=max_tilt,
-                        group_signals=risk_signals,
-                    )
-                    target_weights[risk_indices] = risk_group_weights * risk_budget
-
-                if safe_indices and safe_budget > 0:
-                    target_weights[safe_indices] = safe_group_weights * safe_budget
-
-                # Normalize if numerical drift pushes sum above 1.0.
-                target_sum = float(target_weights.sum())
-                if target_sum > 1.0 and target_sum > 0:
-                    target_weights = target_weights / target_sum
-                    target_sum = float(target_weights.sum())
-
-                target_vals = target_weights * current_val
-                diffs = target_vals - current_asset_vals
-                trade_volume = float(np.sum(np.abs(diffs)))
-                total_fees = trade_volume * fees
-                current_val_after_fees = max(0.0, current_val - total_fees)
-
-                target_vals_after_fees = target_weights * current_val_after_fees
-                cash_balance = current_val_after_fees - float(np.sum(target_vals_after_fees))
-                current_units = np.divide(
-                    target_vals_after_fees,
-                    today_prices,
-                    out=np.zeros_like(target_vals_after_fees),
-                    where=today_prices > 0,
+                # ── Assemble context and delegate to rebalance_fn ──────────────
+                ctx = RebalanceContext(
+                    current_units=current_units.copy(),
+                    today_prices=today_prices,
+                    fees=fees,
+                    cash_balance=cash_balance,
+                    price_window=price_window,
+                    returns_window=returns_window,
+                    trend_score=trend_score,
+                    model_threshold=model_threshold,
+                    top_k=top_k,
+                    target_volatility=target_volatility,
+                    max_leverage=max_leverage,
+                    safe_asset_indices=safe_asset_indices,
+                    col_names=col_names,
                 )
-                current_val = current_val_after_fees
 
-                if (
-                    rebalance_fn is RebalanceAlgorithms.signal_weighted_rebalance
-                    and signals is not None
-                ):
-                    logger.info(
-                        f"Rebalance (signal_weighted) | idx={i}, max_tilt={max_tilt:.3f}, "
-                        f"signals={np.round(signals, 3).tolist()}, risk_budget={risk_budget:.3f}, "
-                        f"safe_budget={safe_budget:.3f}, cash_budget={max(0.0, 1.0 - target_sum):.3f}"
-                    )
-                else:
-                    logger.info(
-                        f"Rebalance | idx={i}, risk_budget={risk_budget:.3f}, "
-                        f"safe_budget={safe_budget:.3f}, cash_budget={max(0.0, 1.0 - target_sum):.3f}"
-                    )
+                result: RebalanceResult = rebalance_fn(ctx)
+
+                # Apply result
+                current_units = result.new_units
+                cash_balance = result.new_cash
+                current_val = float(np.sum(current_units * today_prices) + cash_balance)
+
+                total_exposure = float(np.sum(current_units * today_prices)) / current_val if current_val > 0 else 0.0
+                logger.info(
+                    f"Rebalance | idx={i}, exposure={total_exposure:.2f}, "
+                    f"cash_budget={max(0.0, 1.0 - total_exposure):.2f}"
+                )
 
             portfolio_history[i] = current_val
             weights_history[i] = (
@@ -500,7 +305,7 @@ class BacktestEngine:
                 else np.zeros(n_assets)
             )
 
-        # 5. Finalize
+        # ── 5. Finalise ────────────────────────────────────────────────────────
         self.portfolio_value = pd.Series(
             portfolio_history, index=dates, name="Portfolio Value"
         )
@@ -512,7 +317,7 @@ class BacktestEngine:
 
         logger.info("Simulation complete.")
 
-    def get_performance_stats(self) -> Dict[str, float]:
+    def get_performance_stats(self, benchmark_col: str = "SP500") -> Dict[str, float]:
         """Calculate performance statistics for the backtest."""
         if self.portfolio_value is None or self.portfolio_value.empty:
             return {}
@@ -533,6 +338,73 @@ class BacktestEngine:
         max_dd = self.drawdown.min() if self.drawdown is not None else 0
         vol = returns.std() * np.sqrt(252)
 
+        # New metrics calculation
+        calmar = cagr / abs(max_dd) if max_dd != 0 else 0
+
+        # Max Recovery Days: longest calendar-day span from a peak to the next
+        # point where the portfolio fully recovers to (or above) that peak.
+        # Algorithm:
+        #   1. Find every date that sets a new all-time high (peak).
+        #   2. For each consecutive pair of peaks (peak_i, peak_{i+1}), the
+        #      recovery period length = (peak_{i+1} - peak_i).days.
+        #      If the portfolio never fully recovers after the last peak, that
+        #      ongoing drawdown period stretches to the final date.
+        #   3. max_recovery_days = max over all such periods.
+        running_max = self.portfolio_value.cummax()
+        max_recovery_days = 0
+        if not running_max.empty:
+            # Dates where the portfolio value equals the running maximum (new high)
+            peak_dates = self.portfolio_value.index[
+                self.portfolio_value >= running_max - running_max * 1e-9
+            ]
+            if len(peak_dates) >= 2:
+                # Gaps between consecutive new-high dates
+                for i in range(1, len(peak_dates)):
+                    gap = (peak_dates[i] - peak_dates[i - 1]).days
+                    if gap > max_recovery_days:
+                        max_recovery_days = gap
+            # Also account for an ongoing drawdown that has not yet recovered
+            last_peak_date = peak_dates[-1] if len(peak_dates) > 0 else self.portfolio_value.index[0]
+            ongoing = (self.portfolio_value.index[-1] - last_peak_date).days
+            if ongoing > max_recovery_days:
+                max_recovery_days = ongoing
+
+        win_rate = float((returns > 0).mean()) if not returns.empty else 0.0
+
+        avg_win = returns[returns > 0].mean() if not returns[returns > 0].empty else 0.0
+        avg_loss = returns[returns < 0].mean() if not returns[returns < 0].empty else 0.0
+        pl_ratio = float(avg_win / abs(avg_loss)) if avg_loss != 0 else 0.0
+
+        # Alpha, Beta, Information Ratio w.r.t Benchmark
+        alpha = 0.0
+        beta = 0.0
+        info_ratio = 0.0
+
+        if self.data is not None and benchmark_col in self.data.columns:
+            # Align dates
+            bench_prices = self.data[benchmark_col].loc[self.portfolio_value.index].dropna()
+            bench_rets = bench_prices.pct_change(fill_method=None).dropna()
+
+            # Match lengths
+            aligned_rets = pd.concat([returns, bench_rets], axis=1).dropna()
+            aligned_rets.columns = ['Strategy', 'Benchmark']
+
+            strat_rets_align = aligned_rets['Strategy']
+            bench_rets_align = aligned_rets['Benchmark']
+
+            if not bench_rets_align.empty and bench_rets_align.std() != 0:
+                covar = strat_rets_align.cov(bench_rets_align)
+                ben_var = bench_rets_align.var()
+                beta = covar / ben_var if ben_var != 0 else 0
+
+                annual_strat_ret = strat_rets_align.mean() * 252
+                annual_bench_ret = bench_rets_align.mean() * 252
+                alpha = annual_strat_ret - beta * annual_bench_ret
+
+                active_rets = strat_rets_align - bench_rets_align
+                if active_rets.std() != 0:
+                    info_ratio = (active_rets.mean() / active_rets.std()) * np.sqrt(252)
+
         return {
             "Start Value": float(start_val),
             "End Value": float(end_val),
@@ -542,6 +414,13 @@ class BacktestEngine:
             "Max Drawdown": float(max_dd),
             "Volatility": float(vol),
             "Years": float(n_years),
+            "Alpha": float(alpha),
+            "Beta": float(beta),
+            "Information Ratio": float(info_ratio),
+            "Calmar Ratio": float(calmar),
+            "Max Recovery Days": int(max_recovery_days),
+            "Win Rate": float(win_rate),
+            "P/L Ratio": float(pl_ratio),
         }
 
     def plot_results(
@@ -694,6 +573,7 @@ class BacktestEngine:
             ),
             template="plotly_dark",
             hovermode="x unified",
+            hoverlabel=dict(namelength=-1),
             legend=dict(
                 orientation="v",
                 yanchor="top",

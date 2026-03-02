@@ -29,25 +29,44 @@ class BacktestConfig(BaseModel):
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
     initial_capital: float = Field(100_000.0, description="Initial portfolio capital")
     fees: float = Field(0.0005, description="Transaction fee rate")
-    rebalance_freq: str = Field("QE", description="Calendar frequency (e.g., QE, YE)")
     benchmark_cols: List[str] = Field(
         default_factory=lambda: ["Nasdaq100", "GoldIndex", "US30Y", "US3M"],
         description="Benchmark columns for comparison",
     )
-    rebalance_interval_days: Optional[int] = Field(
-        None,
+    rebalance_interval_days: int = Field(
+        30,
         description="Fixed interval in days for rebalancing",
     )
     algorithm: str = Field(
         default="permanent_portfolio_rebalance",
         description="Algorithm function name ending with '_rebalance'",
     )
-    asset_cols: Optional[List[str]] = Field(
+    candidate_assets: Optional[List[str]] = Field(
         default=None,
         description=(
-            "Optional list of columns to use as strategy assets; "
+            "Optional list of columns to use as candidate assets; "
             "if None, all columns in the data file will be used"
         ),
+    )
+    safe_assets: Optional[List[str]] = Field(
+        default=["US30Y", "GoldIndex", "US3M"],
+        description="Optional list of assets to shift to when risk-off (if None, shift to Cash)",
+    )
+    top_k: int = Field(
+        default=3,
+        description="Number of top candidate assets to select based on trend score",
+    )
+    target_volatility: float = Field(
+        default=0.10,
+        description="Target annualized portfolio volatility (e.g., 0.10 for 10%)",
+    )
+    vol_lookback: int = Field(
+        default=60,
+        description="Number of past days to compute inverse volatility and portfolio volatility",
+    )
+    max_leverage: float = Field(
+        default=1.0,
+        description="Maximum leverage ratio (1.0 means no leverage)",
     )
     use_trend_model: bool = Field(
         default=False,
@@ -55,7 +74,7 @@ class BacktestConfig(BaseModel):
     )
     trend_model_type: str = Field(
         default="kmeans_simple",
-        description="Trend model type: 'kmeans_simple', 'kmeans_window', 'random_forest', 'torch_mlp', 'autoencoder', or 'hmm'",
+        description="Trend model type: 'kmeans_simple', 'kmeans_window', 'random_forest', or 'torch_mlp'",
     )
     model_path: Optional[str] = Field(
         default=None,
@@ -68,53 +87,6 @@ class BacktestConfig(BaseModel):
     model_threshold: float = Field(
         default=0.5,
         description="Trend score threshold in [0,1]; only rebalance when score >= threshold",
-    )
-    max_tilt: float = Field(
-        default=0.1,
-        description="Maximum weight tilt deviation from equal weight",
-    )
-    signal_weight_mode: str = Field(
-        default="raw_signal_tilt",
-        description=(
-            "Signal-weighted mode: 'raw_signal_tilt' or "
-            "'signal_tilt_with_risk_leverage'"
-        ),
-    )
-    risk_asset_cols: Optional[List[str]] = Field(
-        default=None,
-        description="Optional risk-asset bucket columns (must be subset of strategy assets)",
-    )
-    safe_asset_cols: Optional[List[str]] = Field(
-        default=None,
-        description="Optional safe-asset bucket columns (must be subset of strategy assets)",
-    )
-    safe_allocation_mode: str = Field(
-        default="equal_weight",
-        description="Safe-bucket allocation mode: 'equal_weight', 'fixed_weight', or 'single_asset'",
-    )
-    safe_fixed_weights: Optional[Dict[str, float]] = Field(
-        default=None,
-        description="Per-safe-asset weights when safe_allocation_mode='fixed_weight'",
-    )
-    safe_single_asset: Optional[str] = Field(
-        default=None,
-        description="Single safe asset name when safe_allocation_mode='single_asset'",
-    )
-    risk_leverage_min: float = Field(
-        default=0.2,
-        description="Minimum risk leverage when trend score is low",
-    )
-    risk_leverage_max: float = Field(
-        default=1.0,
-        description="Maximum risk leverage when trend score is high",
-    )
-    risk_leverage_score_lo: float = Field(
-        default=0.2,
-        description="Trend score lower bound mapped to risk_leverage_min",
-    )
-    risk_leverage_score_hi: float = Field(
-        default=0.8,
-        description="Trend score upper bound mapped to risk_leverage_max",
     )
 
 
@@ -152,15 +124,15 @@ class BacktestService:
         """Resolve a relative path against the project root."""
         return os.path.join(project_root, path)
 
-    def _build_aligned_filename_from_asset_cols(self, asset_cols: Optional[List[str]]) -> str:
-        """Build aligned CSV filename based on strategy asset universe.
+    def _build_aligned_filename_from_candidate_assets(self, candidate_assets: Optional[List[str]]) -> str:
+        """Build aligned CSV filename based on candidate asset universe.
 
-        If asset_cols is None or empty, fall back to the default global file.
+        If candidate_assets is None or empty, fall back to the default global file.
         """
-        if not asset_cols:
+        if not candidate_assets:
             return "data_processed/aligned_assets.csv"
 
-        names_sorted = sorted(asset_cols)
+        names_sorted = sorted(candidate_assets)
         key = "_".join(names_sorted)
         safe_key = sanitize_filename(key)
         return os.path.join("data_processed", f"aligned_{safe_key}.csv")
@@ -177,7 +149,7 @@ class BacktestService:
             data_file_abs = global_abs
         else:
             # 2) 如果找不到全局文件，则退回到按资产集合推导专属对齐文件的旧逻辑
-            data_file_rel = self._build_aligned_filename_from_asset_cols(cfg.asset_cols)
+            data_file_rel = self._build_aligned_filename_from_candidate_assets(cfg.candidate_assets)
             data_file_abs = self._resolve_path(data_file_rel)
 
         if not os.path.exists(data_file_abs):
@@ -193,47 +165,37 @@ class BacktestService:
 
         rebalance_fn = algo_info["fn"]
 
-        strategy = BacktestEngine(data_file_abs, cfg.initial_capital)
-        if cfg.signal_weight_mode not in {
-            "raw_signal_tilt",
-            "signal_tilt_with_risk_leverage",
-        }:
-            raise RuntimeError(
-                "Unsupported signal_weight_mode. "
-                "Use 'raw_signal_tilt' or 'signal_tilt_with_risk_leverage'."
-            )
+        # Ensure safe assets are included in candidate_assets if we might use them.
+        # Always work on a *copy* so we never mutate the caller's cfg object.
+        actual_candidate_assets = list(cfg.candidate_assets) if cfg.candidate_assets is not None else None
+        if actual_candidate_assets is not None and cfg.use_trend_model and cfg.safe_assets:
+            for sa in cfg.safe_assets:
+                if sa not in actual_candidate_assets:
+                    actual_candidate_assets.append(sa)
 
-        risk_leverage_enabled = (
-            cfg.algorithm == "signal_weighted_rebalance"
-            and cfg.signal_weight_mode == "signal_tilt_with_risk_leverage"
-        )
+        strategy = BacktestEngine(data_file_abs, cfg.initial_capital)
         strategy.run_backtest(
             start_date=cfg.start_date,
             end_date=cfg.end_date,
-            rebalance_freq=cfg.rebalance_freq,
             fees=cfg.fees,
             rebalance_fn=rebalance_fn,
             rebalance_interval_days=cfg.rebalance_interval_days,
-            asset_cols=cfg.asset_cols,
+            candidate_assets=actual_candidate_assets,
             use_trend_model=cfg.use_trend_model,
             model_lookback_days=cfg.model_lookback_days,
             model_threshold=cfg.model_threshold,
             model_type=cfg.trend_model_type,
             model_path=cfg.model_path,
-            max_tilt=cfg.max_tilt,
-            risk_asset_cols=cfg.risk_asset_cols,
-            safe_asset_cols=cfg.safe_asset_cols,
-            safe_allocation_mode=cfg.safe_allocation_mode,
-            safe_fixed_weights=cfg.safe_fixed_weights,
-            safe_single_asset=cfg.safe_single_asset,
-            risk_leverage_enabled=risk_leverage_enabled,
-            risk_leverage_min=cfg.risk_leverage_min,
-            risk_leverage_max=cfg.risk_leverage_max,
-            risk_leverage_score_lo=cfg.risk_leverage_score_lo,
-            risk_leverage_score_hi=cfg.risk_leverage_score_hi,
+            top_k=cfg.top_k,
+            target_volatility=cfg.target_volatility,
+            vol_lookback=cfg.vol_lookback,
+            max_leverage=cfg.max_leverage,
+            safe_assets=cfg.safe_assets,
         )
 
-        stats = strategy.get_performance_stats()
+        stats = strategy.get_performance_stats(
+            benchmark_col=cfg.benchmark_cols[0] if cfg.benchmark_cols else "SP500"
+        )
         if not stats:
             raise RuntimeError("Backtest simulation produced no statistics.")
 
@@ -243,26 +205,6 @@ class BacktestService:
         )
         if not html_path:
             raise RuntimeError("Failed to generate performance chart.")
-
-        # Save configuration to YAML
-        import yaml
-        from datetime import datetime
-        configs_dir = os.path.join(output_dir_abs, "configs")
-        os.makedirs(configs_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        algo_short = cfg.algorithm.replace("_rebalance", "")
-        model_info = f"_{cfg.trend_model_type}" if cfg.use_trend_model else ""
-        yaml_filename = f"config_{timestamp}_{algo_short}{model_info}.yaml"
-        yaml_path = os.path.join(configs_dir, yaml_filename)
-        
-        try:
-            cfg_dict = cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()
-            with open(yaml_path, "w", encoding="utf-8") as f:
-                yaml.dump(cfg_dict, f, allow_unicode=True, sort_keys=False)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to save config YAML: {e}")
 
         rel_html_path = os.path.relpath(html_path, project_root)
         result_url = f"/results/{os.path.basename(html_path)}"

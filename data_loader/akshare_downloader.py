@@ -2,9 +2,29 @@ import akshare as ak
 import pandas as pd
 import os
 from typing import List, Dict, Optional, Any
+from datetime import datetime
+from contextlib import contextmanager
+
 from logger import logger
-from utils.decorators import retry
 from utils.naming import sanitize_filename
+from utils.decorators import ExecutionDecorators
+
+@contextmanager
+def no_proxy():
+    """Context manager to temporarily disable proxy settings for domestic API calls."""
+    proxy_keys = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]
+    saved_proxies = {key: os.environ.get(key) for key in proxy_keys}
+    
+    for key in proxy_keys:
+        if key in os.environ:
+            del os.environ[key]
+            
+    try:
+        yield
+    finally:
+        for key, value in saved_proxies.items():
+            if value is not None:
+                os.environ[key] = value
 
 class USMarketLoader:
     """
@@ -28,7 +48,7 @@ class USMarketLoader:
             os.makedirs(self.storage_path)
             logger.info(f"Created storage directory at: {self.storage_path}")
 
-    @retry(max_retries=5, delay=3)
+    @ExecutionDecorators.retry(max_retries=5, delay=3)
     def _fetch_single_symbol(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Fetch historical data for a single symbol from AkShare.
@@ -46,7 +66,8 @@ class USMarketLoader:
         """
         logger.info(f"Fetching data for {symbol}...")
 
-        df = ak.stock_us_daily(symbol=symbol, adjust="qfq")
+        with no_proxy():
+            df = ak.stock_us_daily(symbol=symbol, adjust="qfq")
 
         if df is None or df.empty:
             raise ValueError(f"No data returned for {symbol}")
@@ -150,15 +171,16 @@ class AkshareIncrementalLoader:
     def _get_existing_data(self, file_path: str) -> pd.DataFrame:
         if not os.path.exists(file_path):
             return pd.DataFrame()
+
         try:
-            df = pd.read_csv(file_path, index_col="Date", parse_dates=True)
+            df = pd.read_csv(file_path, index_col=0, parse_dates=True)
             return df
         except Exception as e:
             logger.warning(f"Corrupt file found at {file_path}, starting fresh. Error: {e}")
             return pd.DataFrame()
 
-    def download_symbol(self, ticker: str, name: str, start_date_fallback: str = "1985-01-01") -> pd.DataFrame:
-        """Download a single symbol via AkShare, returning DataFrame and saving to CSV."""
+    def download_symbol(self, ticker: str, name: str, start_date_fallback: str = "1985-01-01") -> bool:
+        """Download a single symbol via AkShare, returning boolean status and saving to CSV."""
         safe_name = sanitize_filename(name)
         file_path = os.path.join(self.storage_path, f"{safe_name}.csv")
         df_old = self._get_existing_data(file_path)
@@ -167,9 +189,15 @@ class AkshareIncrementalLoader:
         if not df_old.empty:
             last_date = df_old.index[-1].date()
             import datetime as _dt
-
-            start_download_date = last_date + _dt.timedelta(days=1)
-            is_update = True
+            
+            # Truncate last row to avoid incomplete intraday data
+            df_old = df_old.iloc[:-1]
+            if df_old.empty:
+                start_download_date = _dt.datetime.strptime(start_date_fallback, "%Y-%m-%d").date()
+            else:
+                last_date = df_old.index[-1].date()
+                start_download_date = last_date + _dt.timedelta(days=1)
+                is_update = True
         else:
             import datetime as _dt
 
@@ -178,9 +206,6 @@ class AkshareIncrementalLoader:
         import datetime as _dt
 
         today = _dt.date.today()
-        if start_download_date >= today:
-            logger.info(f"[{name}] AkShare already up to date ({start_download_date}).")
-            return df_old
 
         start_str = start_download_date.strftime("%Y%m%d")
         end_str = today.strftime("%Y%m%d")
@@ -189,11 +214,11 @@ class AkshareIncrementalLoader:
             df_new = self._us_loader._fetch_single_symbol(ticker, start_str, end_str)
         except Exception as e:
             logger.error(f"[{name}] AkShare download failed: {e}")
-            return df_old
+            return False
 
         if df_new.empty:
             logger.info(f"[{name}] AkShare returned no new data.")
-            return df_old
+            return False
 
         df_new.index.name = "Date"
 
@@ -209,7 +234,35 @@ class AkshareIncrementalLoader:
         status = "Updated" if is_update else "Created"
         logger.info(f"[{name}] AkShare {status} successfully. Rows: {len(df_final)}")
 
-        return df_final
+        return True
+
+    def probe_earliest_date(self, ticker: str) -> Optional[datetime]:
+        """
+        Probe the earliest available historical data date for a ticker on Akshare.
+        
+        Args:
+            ticker (str): The ticker symbol to probe.
+            
+        Returns:
+            Optional[datetime]: Earliest date available, or None if failed.
+        """
+        try:
+            # Query maximum history using akshare common fund API for probing
+            with no_proxy():
+                df = ak.fund_etf_hist_em(
+                    symbol=ticker,
+                    period="daily",
+                    start_date="19800101",
+                    end_date=datetime.now().strftime("%Y%m%d"),
+                    adjust="hfq"
+                )
+            if df.empty:
+                return None
+            df['Date'] = pd.to_datetime(df['日期'])
+            return df['Date'].iloc[0]
+        except Exception as e:
+            logger.warning(f"Failed to probe Akshare for {ticker}: {str(e)}")
+            return None
 
     def download_batch(self, assets: List[Dict[str, Any]], start_year: int = 1985) -> None:
         import datetime as _dt
