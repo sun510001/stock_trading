@@ -1,6 +1,7 @@
 numpy>=1.26,<2.0
 pandas>=2.0,<3.0
 akshare
+baostock
 yfinance>=0.2.30
 plotly>=5.20.0,<6.0
 fastapi>=0.110.0,<1.0

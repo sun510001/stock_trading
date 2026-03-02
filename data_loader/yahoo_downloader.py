@@ -34,6 +34,9 @@ class YahooIncrementalLoader:
     def _get_existing_data(self, file_path: str) -> pd.DataFrame:
         """
         Reads existing CSV. Returns empty DataFrame if file doesn't exist.
+        Handles both formats:
+        - Correct: Date as index (Date,Open,High,Low,Close,Volume)
+        - Legacy broken: Date as last column (Open,High,Low,Close,Volume,Date)
 
         Args:
             file_path (str): The absolute path to the CSV file.
@@ -44,7 +47,22 @@ class YahooIncrementalLoader:
         if not os.path.exists(file_path):
             return pd.DataFrame()
         try:
-            df = pd.read_csv(file_path, index_col='Date', parse_dates=True)
+            # Peek at header to detect broken "Date as last column" format
+            with open(file_path, 'r') as f:
+                header = f.readline().strip().split(',')
+
+            if header[0] != 'Date' and 'Date' in header:
+                # Legacy broken format: Date is not the first column
+                df = pd.read_csv(file_path)
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.set_index('Date')
+            else:
+                df = pd.read_csv(file_path, index_col='Date', parse_dates=True)
+
+            # Sanitise index
+            df = df[df.index.notna()]
+            df = df[~df.index.duplicated(keep='last')]
+            df.sort_index(inplace=True)
             return df
         except Exception as e:
             logger.warning(f"Corrupt file found at {file_path}, starting fresh. Error: {e}")
@@ -68,22 +86,14 @@ class YahooIncrementalLoader:
         safe_name = sanitize_filename(name)
         file_path = os.path.join(self.storage_path, f"{safe_name}.csv")
         df_old = self._get_existing_data(file_path)
-        
-        is_update = False
+
+        # Determine the start date for the incremental download.
+        # We always re-fetch from the last recorded date so that the potentially
+        # incomplete intraday candle is refreshed.  The actual truncation of the
+        # old last row happens AFTER a successful download, during the merge step,
+        # so that no data is lost if the download fails.
         if not df_old.empty:
-            last_date = df_old.index[-1].date()
-            
-            # Check if we have more than one row to safely drop the last one
-            if len(df_old) > 1:
-                # Drop the last row to discard potential incomplete intraday data
-                df_old = df_old.iloc[:-1]
-                is_update = True
-            else:
-                # If only one row exists, discard it and treat it as a fresh download
-                df_old = pd.DataFrame()
-                is_update = False
-                
-            start_download_date = last_date
+            start_download_date = df_old.index[-1].date()
         else:
             start_download_date = datetime.strptime(start_date_fallback, "%Y-%m-%d").date()
 
@@ -110,7 +120,7 @@ class YahooIncrementalLoader:
             except Exception as e:
                 logger.warning(f"[{name}] MultiIndex parsing warning: {e}. Flattening columns.")
                 df_new.columns = df_new.columns.get_level_values(0)
-        
+
         # Standardize OHLCV columns
         desired_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         for col in desired_cols:
@@ -119,7 +129,6 @@ class YahooIncrementalLoader:
 
         df_new = df_new[desired_cols]
         df_new.index.name = 'Date'
-        df_new = df_new.reset_index()
 
         # Fix zero values or NaNs by filling with Close price
         for col in ['Open', 'High', 'Low']:
@@ -127,10 +136,26 @@ class YahooIncrementalLoader:
 
         df_new['Volume'] = df_new['Volume'].fillna(0)
 
+        # Drop any rows where the Date index is NaT (yfinance trailing empty rows)
+        df_new = df_new[df_new.index.notna()]
+
         logger.info(f"Appending {len(df_new)} rows using Yahoo source from {start_download_date} for {ticker}")
-        df_final = pd.concat([df_old, df_new]).drop_duplicates(subset=['Date'], keep='last').sort_values('Date')
-        
-        df_final.to_csv(file_path, index=False)
+
+        if not df_old.empty:
+            # Download succeeded: now safe to drop the old last row (potentially
+            # incomplete intraday candle) before merging with fresh data.
+            df_base = df_old.iloc[:-1] if len(df_old) > 1 else pd.DataFrame()
+            if not df_base.empty:
+                df_final = pd.concat([df_base, df_new])
+            else:
+                df_final = df_new
+            df_final = df_final[~df_final.index.duplicated(keep='last')]
+            df_final.sort_index(inplace=True)
+        else:
+            df_final = df_new.sort_index()
+
+        df_final.index.name = 'Date'
+        df_final.to_csv(file_path, index=True)
         logger.info(f"Updated {ticker} to {file_path}")
         return True
 

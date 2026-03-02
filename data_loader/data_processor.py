@@ -46,6 +46,7 @@ class DataProcessor:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Raw data file not found: {path}")
         df = pd.read_csv(path, index_col="Date", parse_dates=True)
+        df = df[df.index.notna()]
         df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
         if "Close" in df.columns:
@@ -109,6 +110,13 @@ class DataProcessor:
             raise ValueError("No assets were successfully processed.")
 
         portfolio_df = pd.DataFrame(prices)
+        # Ensure the index is a proper DatetimeIndex, monotonically increasing,
+        # and free of duplicates before any further operations.
+        portfolio_df.index = pd.to_datetime(portfolio_df.index)
+        # Drop NaT rows (trailing empty rows from Yahoo downloads)
+        portfolio_df = portfolio_df[portfolio_df.index.notna()]
+        portfolio_df = portfolio_df[~portfolio_df.index.duplicated(keep="last")]
+        portfolio_df.sort_index(inplace=True)
         original_len = len(portfolio_df)
         # 只丢弃整行全为空的日期，保留部分资产缺失的数据，
         # 以便在回测阶段按具体资产子集再做裁剪。

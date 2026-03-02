@@ -8,6 +8,15 @@ import time
 from typing import List, Optional, Dict, Any
 import pandas as pd
 
+# Ensure localhost / 127.0.0.1 requests are never routed through a system proxy.
+# This fixes the common issue where tools like Clash/V2Ray set http_proxy globally
+# and break fetch() calls from the UI to the local API server.
+_NO_PROXY_HOSTS = "127.0.0.1,localhost,::1"
+for _var in ("no_proxy", "NO_PROXY"):
+    existing = os.environ.get(_var, "")
+    merged = ",".join(filter(None, [existing, _NO_PROXY_HOSTS]))
+    os.environ[_var] = merged
+
 # Ensure project root is in path so we can import backend.service
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -17,6 +26,7 @@ from backend.service import BacktestConfig, BacktestResult, BacktestService
 from backend.assets_config import AssetConfigManager
 from data_loader.yahoo_downloader import YahooIncrementalLoader
 from data_loader.akshare_downloader import AkshareIncrementalLoader
+from data_loader.baostock_downloader import BaostockIncrementalLoader
 from data_loader.data_processor import DataProcessor
 from utils.naming import sanitize_filename
 
@@ -119,7 +129,16 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
         source = asset.get("source", None)
         if os.path.exists(csv_path):
             try:
-                df = pd.read_csv(csv_path, index_col="Date", parse_dates=True)
+                with open(csv_path, 'r') as _f:
+                    _header = _f.readline().strip().split(',')
+                if _header[0] != 'Date' and 'Date' in _header:
+                    # Legacy broken format: Date as last column
+                    _df = pd.read_csv(csv_path)
+                    _df['Date'] = pd.to_datetime(_df['Date'])
+                    df = _df.set_index('Date')
+                else:
+                    df = pd.read_csv(csv_path, index_col="Date", parse_dates=True)
+                df = df[df.index.notna()]
                 if not df.empty:
                     d_start = df.index.min().date().isoformat()
                     d_end = df.index.max().date().isoformat()
@@ -219,6 +238,13 @@ class DownloadRequest(BaseModel):
         None,
         description="Optional list of asset names to download; if omitted, all assets are processed.",
     )
+    downloader: Optional[str] = Field(
+        None,
+        description=(
+            "Force a specific download backend: 'yahoo', 'akshare', 'baostock', or None/'auto' "
+            "for the default smart-routing behaviour."
+        ),
+    )
 
 
 def _build_aligned_filename_from_assets(assets: List[Dict[str, Any]]) -> str:
@@ -262,22 +288,47 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
         data_path = os.path.join(project_root, "data")
         yahoo_loader = YahooIncrementalLoader(storage_path=data_path)
         akshare_loader = AkshareIncrementalLoader(storage_path=data_path)
-        
+        baostock_loader = BaostockIncrementalLoader(storage_path=data_path)
+
+        # Forced downloader override: 'yahoo' | 'akshare' | 'baostock' | None (auto)
+        forced_dl = (req.downloader or "auto").strip().lower()
+        if forced_dl not in ("yahoo", "akshare", "baostock", "auto"):
+            forced_dl = "auto"
+        logger.info(f"Download mode: {forced_dl.upper()}")
+
         updated_assets = False
 
         for asset in assets:
             name = asset["name"]
             ticker = asset["ticker"]
-            
+
             # Start date logic
             asset_start_date = asset.get("initial_start_date") or asset.get("start_date")
             start_fallback = asset_start_date if asset_start_date else "1985-01-01"
-            
-            # Known source flow
+
             known_source = asset.get("source")
             success = False
-            
-            if known_source == "yahoo":
+
+            # ── FORCED MODE ───────────────────────────────────────────────────
+            if forced_dl != "auto":
+                logger.info(f"[FORCED:{forced_dl.upper()}] Downloading {name} ({ticker})")
+                if forced_dl == "yahoo":
+                    success = yahoo_loader.download_symbol(ticker, name, start_fallback)
+                elif forced_dl == "akshare":
+                    # Preserve the fine-grained source type (akshare_index etc.) if available
+                    ak_source = known_source if (known_source and known_source.startswith("akshare")) else "akshare"
+                    success = akshare_loader.download_symbol(ticker, name, start_fallback, source=ak_source)
+                elif forced_dl == "baostock":
+                    success = baostock_loader.download_symbol(ticker, name, start_fallback)
+
+                if success and asset.get("source") != forced_dl:
+                    # Only overwrite source when it's a genuinely different backend
+                    if forced_dl != "akshare" or not (known_source and known_source.startswith("akshare")):
+                        asset["source"] = forced_dl
+                        updated_assets = True
+
+            # ── AUTO MODE (smart routing with fallbacks) ──────────────────────
+            elif known_source == "yahoo":
                 logger.info(f"Downloading known Yahoo asset: {name} ({ticker})")
                 success = yahoo_loader.download_symbol(ticker, name, start_fallback)
                 if not success:
@@ -286,48 +337,72 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
                     if success:
                         asset["source"] = "akshare"
                         updated_assets = True
+                    else:
+                        logger.info(f"Akshare fallback failed for {name}. Attempting Baostock fallback...")
+                        try:
+                            success = baostock_loader.download_symbol(ticker, name, start_fallback)
+                            if success:
+                                asset["source"] = "baostock"
+                                updated_assets = True
+                        except Exception:
+                            success = False
 
-            elif known_source == "akshare":
-                logger.info(f"Downloading known Akshare asset: {name} ({ticker})")
-                success = akshare_loader.download_symbol(ticker, name, start_fallback)
+            elif known_source is not None and known_source.startswith("akshare"):
+                # Handles: "akshare", "akshare_index", "akshare_etf",
+                #           "akshare_gold", "akshare_hk_index"
+                logger.info(f"Downloading known AkShare asset: {name} ({ticker}) [source={known_source}]")
+                success = akshare_loader.download_symbol(
+                    ticker, name, start_fallback, source=known_source
+                )
                 if not success:
                     logger.warning(f"Akshare failed for {name}. Attempting Yahoo fallback...")
                     success = yahoo_loader.download_symbol(ticker, name, start_fallback)
                     if success:
                         asset["source"] = "yahoo"
                         updated_assets = True
+                    else:
+                        logger.info(f"Yahoo fallback failed for {name}. Attempting Baostock fallback...")
+                        try:
+                            success = baostock_loader.download_symbol(ticker, name, start_fallback)
+                            if success:
+                                asset["source"] = "baostock"
+                                updated_assets = True
+                        except Exception:
+                            success = False
+
             else:
                 # Smart Probing Flow for unknown assets
-                logger.info(f"Unknown source for {name} ({ticker}). Probing both APIs...")
+                logger.info(f"Unknown source for {name} ({ticker}). Probing Yahoo, Akshare, and Baostock...")
                 d_yf = yahoo_loader.probe_earliest_date(ticker)
                 d_ak = akshare_loader.probe_earliest_date(ticker)
-                
-                if d_yf is None and d_ak is None:
-                    logger.error(f"Asset {name} ({ticker}) could not be resolved on either Yahoo or Akshare.")
+                try:
+                    d_ba = baostock_loader.probe_earliest_date(ticker)
+                except Exception:
+                    d_ba = None
+
+                if d_yf is None and d_ak is None and d_ba is None:
+                    logger.error(f"Asset {name} ({ticker}) could not be resolved on Yahoo, Akshare, or Baostock.")
                     continue
-                
-                # Compare and decide
-                chosen_source = None
-                if d_yf is not None and d_ak is None:
-                    chosen_source = "yahoo"
-                elif d_ak is not None and d_yf is None:
-                    chosen_source = "akshare"
-                else:
-                    # Both are valid, choose the one with the earlier date
-                    if d_yf <= d_ak:
-                        chosen_source = "yahoo"
-                    else:
-                        chosen_source = "akshare"
-                
-                logger.info(f"Probe complete. Yahoo: {d_yf}, Akshare: {d_ak}. Chose: {chosen_source} for {name}")
+
+                available = {}
+                if d_yf is not None:
+                    available["yahoo"] = d_yf
+                if d_ak is not None:
+                    available["akshare"] = d_ak
+                if d_ba is not None:
+                    available["baostock"] = d_ba
+
+                chosen_source = min(available, key=lambda k: available[k])
+                logger.info(f"Probe complete. Yahoo: {d_yf}, Akshare: {d_ak}, Baostock: {d_ba}. Chose: {chosen_source} for {name}")
                 asset["source"] = chosen_source
                 updated_assets = True
-                
-                # Perform the actual download
+
                 if chosen_source == "yahoo":
                     success = yahoo_loader.download_symbol(ticker, name, start_fallback)
                 elif chosen_source == "akshare":
                     success = akshare_loader.download_symbol(ticker, name, start_fallback)
+                elif chosen_source == "baostock":
+                    success = baostock_loader.download_symbol(ticker, name, start_fallback)
 
             if not success:
                 logger.warning(f"Failed to download/update data for {name} ({ticker}).")

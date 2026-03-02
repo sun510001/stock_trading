@@ -68,6 +68,22 @@ class BacktestConfig(BaseModel):
         default=1.0,
         description="Maximum leverage ratio (1.0 means no leverage)",
     )
+    max_asset_weight: float = Field(
+        default=1.0,
+        description="Hard cap on the weight of any single asset (e.g. 0.30 = 30%). Excess is redistributed among other selected assets.",
+    )
+    vol_scale_lookback: int = Field(
+        default=0,
+        description="Short trailing window (days) used exclusively for vol estimation in the scaling layer. 0 = use full vol_lookback window.",
+    )
+    momentum_threshold: float = Field(
+        default=0.0,
+        description="Minimum cumulative return for an asset to pass the absolute-momentum filter. 0.0 = original hard-zero.",
+    )
+    use_sharpe_weighting: bool = Field(
+        default=False,
+        description="If True, allocation weights are proportional to Sharpe-proxy (return / vol) instead of raw cumulative return.",
+    )
     use_trend_model: bool = Field(
         default=False,
         description="Whether to enable the unsupervised trend model to gate rebalancing",
@@ -165,13 +181,8 @@ class BacktestService:
 
         rebalance_fn = algo_info["fn"]
 
-        # Ensure safe assets are included in candidate_assets if we might use them.
         # Always work on a *copy* so we never mutate the caller's cfg object.
         actual_candidate_assets = list(cfg.candidate_assets) if cfg.candidate_assets is not None else None
-        if actual_candidate_assets is not None and cfg.use_trend_model and cfg.safe_assets:
-            for sa in cfg.safe_assets:
-                if sa not in actual_candidate_assets:
-                    actual_candidate_assets.append(sa)
 
         strategy = BacktestEngine(data_file_abs, cfg.initial_capital)
         strategy.run_backtest(
@@ -191,6 +202,10 @@ class BacktestService:
             vol_lookback=cfg.vol_lookback,
             max_leverage=cfg.max_leverage,
             safe_assets=cfg.safe_assets,
+            max_asset_weight=cfg.max_asset_weight,
+            vol_scale_lookback=cfg.vol_scale_lookback,
+            momentum_threshold=cfg.momentum_threshold,
+            use_sharpe_weighting=cfg.use_sharpe_weighting,
         )
 
         stats = strategy.get_performance_stats(

@@ -28,6 +28,13 @@ class BacktestEngine:
         try:
             logger.info(f"Loading data from {self.data_path}...")
             df = pd.read_csv(self.data_path, index_col="Date", parse_dates=True)
+            # Drop rows with NaT index (can occur when Yahoo writes a trailing
+            # empty row that parse_dates converts to NaT).
+            df = df[df.index.notna()]
+            # Guarantee a monotonically increasing, duplicate-free DatetimeIndex
+            # so that label-based slicing (.loc[start:end]) always works.
+            df = df[~df.index.duplicated(keep="last")]
+            df.sort_index(inplace=True)
             self.data = df.astype(float)
             logger.info(f"Data loaded. Shape: {self.data.shape}")
         except Exception as e:
@@ -52,6 +59,10 @@ class BacktestEngine:
         vol_lookback: int = 60,
         max_leverage: float = 1.0,
         safe_assets: Optional[List[str]] = None,
+        max_asset_weight: float = 1.0,
+        vol_scale_lookback: int = 0,
+        momentum_threshold: float = 0.0,
+        use_sharpe_weighting: bool = False,
     ) -> None:
         """Execute the backtest simulation by delegating trade logic to ``rebalance_fn``.
 
@@ -100,6 +111,20 @@ class BacktestEngine:
                 ``RebalanceContext``.
             safe_assets: Column names of safe-haven assets to hold during
                 risk-off periods; forwarded to ``RebalanceContext``.
+            max_asset_weight: Hard cap on the weight of any single asset in
+                the final portfolio (e.g. 0.30 = 30%).  Excess weight is
+                redistributed iteratively among other selected assets.
+                Defaults to 1.0 (no cap); forwarded to ``RebalanceContext``.
+            vol_scale_lookback: Short trailing window (days) used exclusively
+                for covariance estimation in the vol-scaling layer.  0 means
+                use the full ``vol_lookback`` window.  Forwarded to
+                ``RebalanceContext``.
+            momentum_threshold: Minimum cumulative return for an asset to pass
+                the absolute-momentum filter.  0.0 = original hard-zero.
+                Forwarded to ``RebalanceContext``.
+            use_sharpe_weighting: If True, allocation weights are proportional
+                to Sharpe-proxy (return / vol) instead of raw return.
+                Forwarded to ``RebalanceContext``.
         """
         logger.info(
             f"Preparing simulation for range: {start_date or 'Start'} to {end_date or 'End'}..."
@@ -142,13 +167,26 @@ class BacktestEngine:
             logger.error("No data found for the specified date range!")
             return
 
+        # Build the full asset universe: candidate_assets UNION safe_assets.
+        # The engine simulates the entire universe so that safe_asset_indices are
+        # always valid.  Momentum selection (price_window / returns_window) is
+        # restricted to candidate_assets only, preventing safe-haven instruments
+        # from appearing as momentum winners during risk-on periods.
+        safe_assets_list: List[str] = list(safe_assets) if safe_assets else []
+
         if candidate_assets:
-            missing = [c for c in candidate_assets if c not in df_slice.columns]
+            # Universe = ordered candidates first, then any safe assets not already included
+            extra_safe = [s for s in safe_assets_list if s not in candidate_assets]
+            universe_cols = list(candidate_assets) + extra_safe
+            missing = [c for c in universe_cols if c not in df_slice.columns]
             if missing:
                 raise RuntimeError(f"Missing asset columns in data: {missing}")
-            df_slice = df_slice[candidate_assets]
+            df_slice = df_slice[universe_cols]
+            # Indices of pure candidate assets within the universe (for price/returns windows)
+            candidate_col_indices: List[int] = list(range(len(candidate_assets)))
         else:
             df_slice = df_slice.dropna(axis=1, how="all")
+            candidate_col_indices = list(range(len(df_slice.columns)))
 
         df_slice = df_slice.dropna(how="all").ffill().bfill()
         data_filled = self.data.ffill().bfill()
@@ -186,10 +224,10 @@ class BacktestEngine:
         interval = rebalance_interval_days if rebalance_interval_days and rebalance_interval_days > 0 else 30
         rb_indices = set(range(0, n_days, interval))
 
-        # Pre-compute safe asset index positions (relative to candidate universe)
+        # Pre-compute safe asset index positions (within the full universe col_names)
         safe_asset_indices: List[int] = []
-        if safe_assets:
-            for col in safe_assets:
+        if safe_assets_list:
+            for col in safe_assets_list:
                 if col in col_names:
                     safe_asset_indices.append(col_names.index(col))
 
@@ -264,9 +302,11 @@ class BacktestEngine:
                     )
 
                 # ── Build price / return windows for the rebalance function ────
+                # price_window / returns_window are restricted to candidate assets
+                # only, so safe-haven instruments never appear as momentum winners.
                 lookback_start = max(0, i - vol_lookback)
-                price_window = prices[lookback_start:i]    # [lookback, n_assets]
-                returns_window = returns_arr[lookback_start:i]  # [lookback, n_assets]
+                price_window = prices[lookback_start:i][:, candidate_col_indices]
+                returns_window = returns_arr[lookback_start:i][:, candidate_col_indices]
 
                 # ── Assemble context and delegate to rebalance_fn ──────────────
                 ctx = RebalanceContext(
@@ -282,7 +322,12 @@ class BacktestEngine:
                     target_volatility=target_volatility,
                     max_leverage=max_leverage,
                     safe_asset_indices=safe_asset_indices,
+                    candidate_indices=candidate_col_indices,
                     col_names=col_names,
+                    max_asset_weight=max_asset_weight,
+                    vol_scale_lookback=vol_scale_lookback,
+                    momentum_threshold=momentum_threshold,
+                    use_sharpe_weighting=use_sharpe_weighting,
                 )
 
                 result: RebalanceResult = rebalance_fn(ctx)
@@ -297,6 +342,28 @@ class BacktestEngine:
                     f"Rebalance | idx={i}, exposure={total_exposure:.2f}, "
                     f"cash_budget={max(0.0, 1.0 - total_exposure):.2f}"
                 )
+
+                # ── Log algorithm name, selected assets and weights ────────────
+                algo_name = getattr(rebalance_fn, "__name__", str(rebalance_fn))
+                asset_vals = current_units * today_prices
+                nonzero_mask = asset_vals > 1e-8
+                if current_val > 0 and nonzero_mask.any():
+                    held_names = [col_names[j] for j in range(n_assets) if nonzero_mask[j]]
+                    held_weights = asset_vals[nonzero_mask] / current_val
+                    weight_str = ", ".join(
+                        f"{name}={w:.1%}" for name, w in zip(held_names, held_weights)
+                    )
+                    logger.info(
+                        f"Rebalance | algo={algo_name} | "
+                        f"date={dates[i].strftime('%Y-%m-%d')} | "
+                        f"holdings: {weight_str}"
+                    )
+                else:
+                    logger.info(
+                        f"Rebalance | algo={algo_name} | "
+                        f"date={dates[i].strftime('%Y-%m-%d')} | "
+                        f"holdings: CASH 100.0%"
+                    )
 
             portfolio_history[i] = current_val
             weights_history[i] = (
