@@ -276,6 +276,22 @@
                     <label>Max Leverage</label>
                     <input type='number' id='max_leverage' value='1.0' step='0.1' min='1.0' max='5.0'>
                   </div>
+                  <div>
+                    <label>Max Asset Weight</label>
+                    <input type='number' id='max_asset_weight' value='1.0' step='0.05' min='0.1' max='1.0'>
+                  </div>
+                  <div>
+                    <label>Vol Scale Lookback</label>
+                    <input type='number' id='vol_scale_lookback' value='0' min='0' step='5'>
+                  </div>
+                  <div>
+                    <label>Momentum Threshold</label>
+                    <input type='number' id='momentum_threshold' value='0.0' step='0.01' min='-0.2' max='0.2'>
+                  </div>
+                  <div class="flex items-center gap-2 pt-4">
+                    <input type='checkbox' id='use_sharpe_weighting' class="w-4 h-4 accent-blue-500">
+                    <label class="mb-0">Sharpe Weighting</label>
+                  </div>
                 </div>
               </div>
             </div>
@@ -293,7 +309,39 @@
           <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Assets Management</h2>
           <div class="flex gap-2 mb-4 items-center">
             <button type='button' id='refresh-assets-btn' class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm transition-colors">Refresh List</button>
-            <button type='button' id='download-assets-btn' class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded text-sm transition-colors">Download Data</button>
+            <!-- Split-button: Download Data -->
+            <div class="relative inline-flex" id="download-split-container">
+              <button type='button' id='download-assets-btn'
+                class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded-l text-sm transition-colors"
+                title="Download using currently selected source">
+                Download Data
+              </button>
+              <button type='button' id='download-source-toggle'
+                class="bg-orange-800 hover:bg-orange-700 px-2 py-1 rounded-r border-l border-orange-900 text-sm transition-colors"
+                aria-label="Choose download source">
+                ▾ <span id='download-source-label' class='text-xs font-mono'>Auto</span>
+              </button>
+              <!-- Dropdown menu -->
+              <div id='download-source-menu'
+                class="hidden absolute top-full left-0 mt-1 z-50 bg-gray-800 border border-gray-600 rounded shadow-lg min-w-[140px]">
+                <button type='button' data-source='auto'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-green-400 inline-block"></span>Auto (Smart)
+                </button>
+                <button type='button' data-source='yahoo'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-blue-400 inline-block"></span>Yahoo Finance
+                </button>
+                <button type='button' data-source='akshare'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span>AkShare
+                </button>
+                <button type='button' data-source='baostock'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>Baostock
+                </button>
+              </div>
+            </div>
             <button type='button' id='process-assets-btn' class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-sm transition-colors">Process Data</button>
             <label class="flex items-center gap-1 text-xs text-gray-400 ml-auto">
               <input type='checkbox' id='select-all-assets'>
@@ -467,6 +515,10 @@
         if (cfg.target_volatility !== undefined) document.getElementById('target_volatility').value = cfg.target_volatility;
         if (cfg.vol_lookback !== undefined) document.getElementById('vol_lookback').value = cfg.vol_lookback;
         if (cfg.max_leverage !== undefined) document.getElementById('max_leverage').value = cfg.max_leverage;
+        if (cfg.max_asset_weight !== undefined) document.getElementById('max_asset_weight').value = cfg.max_asset_weight;
+        if (cfg.vol_scale_lookback !== undefined) document.getElementById('vol_scale_lookback').value = cfg.vol_scale_lookback;
+        if (cfg.momentum_threshold !== undefined) document.getElementById('momentum_threshold').value = cfg.momentum_threshold;
+        if (cfg.use_sharpe_weighting !== undefined) document.getElementById('use_sharpe_weighting').checked = cfg.use_sharpe_weighting;
 
         // Restore Assets to Dropzones
         const stratZone = document.getElementById('strategy-dropzone');
@@ -653,7 +705,37 @@
 
       updateTrendModelEnabled();
       updateModelPathEnabled();
-    });
+
+      // ── Split-button: download source selector ─────────────────────────
+      const toggleBtn = document.getElementById('download-source-toggle');
+      const menu = document.getElementById('download-source-menu');
+
+      // Initialise with 'auto' selected
+      toggleBtn.dataset.selected = 'auto';
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.toggle('hidden');
+      });
+
+      document.querySelectorAll('.dl-source-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+          const src = opt.dataset.source;
+          toggleBtn.dataset.selected = src;
+          const labelMap = { auto: 'Auto', yahoo: 'Yahoo', akshare: 'AkShare', baostock: 'Baostock' };
+          document.getElementById('download-source-label').textContent = labelMap[src] || src;
+          menu.classList.add('hidden');
+        });
+      });
+
+      // Close menu when clicking outside
+      document.addEventListener('click', (e) => {
+        if (!document.getElementById('download-split-container').contains(e.target)) {
+          menu.classList.add('hidden');
+        }
+      });
+
+    }); // end DOMContentLoaded
 
     async function loadAssets() {
       try {
@@ -801,17 +883,26 @@
         return;
       }
 
-      if (!confirm('Start incremental data update for selected assets?')) return;
+      // Read current downloader selection from split-button
+      const currentSource = document.getElementById('download-source-toggle').dataset.selected || 'auto';
+      const sourceLabel = currentSource === 'auto' ? 'Auto (Smart)' : currentSource.charAt(0).toUpperCase() + currentSource.slice(1);
+
+      if (!confirm(`Start incremental data update for selected assets using [${sourceLabel}]?`)) return;
       const btn = document.getElementById('download-assets-btn');
       const originalText = btn.textContent;
       btn.disabled = true;
+      document.getElementById('download-source-toggle').disabled = true;
       btn.textContent = 'Updating...';
-      
+
       try {
+        const payload = { names: selectedNames };
+        if (currentSource && currentSource !== 'auto') {
+          payload.downloader = currentSource;
+        }
         const res = await fetch('/api/assets/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ names: selectedNames }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (res.status === 429) {
@@ -825,6 +916,7 @@
       } catch (e) { alert('Download trigger failed'); }
       finally {
         btn.disabled = false;
+        document.getElementById('download-source-toggle').disabled = false;
         btn.textContent = originalText;
       }
     }
@@ -958,6 +1050,16 @@
         max_leverage: document.getElementById('max_leverage').value
           ? parseFloat(document.getElementById('max_leverage').value)
           : 1.0,
+        max_asset_weight: document.getElementById('max_asset_weight').value
+          ? parseFloat(document.getElementById('max_asset_weight').value)
+          : 1.0,
+        vol_scale_lookback: document.getElementById('vol_scale_lookback').value
+          ? parseInt(document.getElementById('vol_scale_lookback').value)
+          : 0,
+        momentum_threshold: document.getElementById('momentum_threshold').value
+          ? parseFloat(document.getElementById('momentum_threshold').value)
+          : 0.0,
+        use_sharpe_weighting: document.getElementById('use_sharpe_weighting').checked,
       };
 
       try {
