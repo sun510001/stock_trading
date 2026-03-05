@@ -1,9 +1,10 @@
 import pandas as pd
 import numpy as np
 import os
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any
 from logger import logger
 from data_loader.yahoo_downloader import YahooIncrementalLoader
+from data_loader.fred_downloader import _expand_low_frequency_to_daily_with_ffill
 from utils.naming import sanitize_filename
 
 class DataProcessor:
@@ -53,6 +54,105 @@ class DataProcessor:
             return df["Close"]
         return df.iloc[:, 0]
 
+    @staticmethod
+    def _third_thursday_of_month(ts: pd.Timestamp) -> pd.Timestamp:
+        """Compute the third Thursday date for the month of a timestamp.
+
+        Args:
+            ts: Any timestamp within the target month.
+
+        Returns:
+            pd.Timestamp: Calendar date of the third Thursday in the same month.
+        """
+        month_start = pd.Timestamp(year=ts.year, month=ts.month, day=1)
+        thursday_weekday = 3  # Monday=0 ... Sunday=6
+        days_to_first_thu = (thursday_weekday - month_start.weekday()) % 7
+        first_thursday = month_start + pd.Timedelta(days=days_to_first_thu)
+        return first_thursday + pd.Timedelta(days=14)
+
+    def _apply_macro_availability_rules(
+        self,
+        name: str,
+        values: pd.Series,
+        asset: Dict[str, Any],
+    ) -> pd.Series:
+        """Align macro observations to realistic market availability timestamps.
+
+        This method addresses release-lag look-ahead risks by remapping each
+        macro observation date to a conservative release date before forward
+        filling to daily frequency.
+
+        Supported rules:
+            - ``none``: keep original observation dates.
+            - ``next_thursday``: move each value to the next Thursday.
+            - ``third_thursday_same_month``: move each value to the third
+              Thursday of its observation month.
+            - ``calendar_lag``: shift by ``release_lag_days`` calendar days.
+
+        Args:
+            name: Macro series display name.
+            values: Raw macro series indexed by observation dates.
+            asset: Asset configuration dictionary from ``assets.json``.
+
+        Returns:
+            pd.Series: Re-indexed series using release-date timestamps.
+        """
+        if values.empty:
+            return values
+
+        cleaned = values.copy()
+        cleaned.index = pd.to_datetime(cleaned.index)
+        cleaned = cleaned[cleaned.index.notna()].sort_index().dropna()
+        if cleaned.empty:
+            return cleaned
+
+        freq = str(asset.get("frequency", "")).strip().lower()
+        release_rule = str(asset.get("release_rule", "")).strip().lower()
+        lag_days_raw = asset.get("release_lag_days", 0)
+
+        if not release_rule:
+            default_rules: Dict[str, Dict[str, Any]] = {
+                "JOBLESS_CLAIMS": {"rule": "next_thursday", "lag_days": 0},
+                "PhillyFed": {"rule": "third_thursday_same_month", "lag_days": 0},
+                "M2_YoY": {"rule": "calendar_lag", "lag_days": 35},
+            }
+            default_cfg = default_rules.get(name, {})
+            release_rule = str(default_cfg.get("rule", "none"))
+            lag_days_raw = default_cfg.get("lag_days", lag_days_raw)
+
+        try:
+            lag_days = int(lag_days_raw)
+        except (TypeError, ValueError):
+            lag_days = 0
+
+        idx = cleaned.index
+        if release_rule == "next_thursday":
+            thursday_weekday = 3
+            offsets = (thursday_weekday - idx.weekday) % 7
+            release_idx = idx + pd.to_timedelta(offsets, unit="D")
+        elif release_rule == "third_thursday_same_month":
+            release_idx = pd.DatetimeIndex([self._third_thursday_of_month(ts) for ts in idx])
+        elif release_rule == "calendar_lag":
+            release_idx = idx + pd.to_timedelta(max(0, lag_days), unit="D")
+        else:
+            release_idx = idx
+
+        aligned = pd.Series(cleaned.values, index=release_idx, name=cleaned.name)
+        aligned = aligned[~aligned.index.duplicated(keep="last")].sort_index()
+
+        if name in {"JOBLESS_CLAIMS", "PhillyFed", "M2_YoY"}:
+            logger.warning(
+                f"Macro '{name}' uses release-date alignment rule='{release_rule}' "
+                f"(lag_days={lag_days}). Note: historical revisions are not removed "
+                f"without ALFRED real-time vintages."
+            )
+        else:
+            logger.info(
+                f"Macro '{name}' availability aligned with rule='{release_rule}' "
+                f"(freq={freq}, lag_days={lag_days})."
+            )
+        return aligned
+
     def bond_pricing_engine(self, yield_series: pd.Series, duration: float = 20.0, initial_price: float = 100.0) -> pd.Series:
         y = yield_series / 100.0
         dy = y.diff().fillna(0)
@@ -80,6 +180,35 @@ class DataProcessor:
             name = asset["name"]
             kind = asset.get("kind", "price")
             engine = asset.get("engine")
+
+            # ── Macro indicators (source=fred / kind=macro) ───────────────────
+            # Loaded from data/macro/, expanded to business-daily via ffill.
+            if kind == "macro" or asset.get("source") == "fred":
+                safe_name = sanitize_filename(name)
+                macro_path = os.path.join(self.raw_path, "macro", f"{safe_name}.csv")
+                if not os.path.exists(macro_path):
+                    logger.warning(f"Macro CSV not found, skipping '{name}': {macro_path}")
+                    continue
+                try:
+                    df_macro = pd.read_csv(macro_path, index_col="Date", parse_dates=True)
+                    df_macro = df_macro[df_macro.index.notna()]
+                    df_macro = df_macro[~df_macro.index.duplicated(keep="last")]
+                    df_macro.sort_index(inplace=True)
+                    raw_series = df_macro.iloc[:, 0]  # first column (typically "Value")
+                    raw_series = self._apply_macro_availability_rules(name, raw_series, asset)
+                    freq = (asset.get("frequency") or "").strip().lower()
+                    if freq in {"w", "m", "q", "a"}:
+                        logger.info(
+                            f"Expanding macro '{name}' ({freq}) to daily via forward-fill..."
+                        )
+                        prices[name] = _expand_low_frequency_to_daily_with_ffill(raw_series)
+                    else:
+                        # Already daily (freq=='d') or unknown — use as-is.
+                        prices[name] = raw_series
+                    logger.info(f"Macro indicator '{name}' added to aligned matrix.")
+                except Exception as exc:
+                    logger.warning(f"Failed to load macro '{name}': {exc}")
+                continue
 
             duration: float = 20.0
             if kind == "yield" and engine == "bond":
@@ -129,57 +258,16 @@ class DataProcessor:
         )
         return portfolio_df
 
-    def _maybe_add_term_spread(
-        self,
-        portfolio_df: pd.DataFrame,
-        selected_asset_names: Optional[Set[str]] = None,
-    ) -> pd.DataFrame:
-        """Add raw-yield TermSpread (= raw US30Y - raw US3M) when enabled.
-
-        Rule:
-        - If selected_asset_names is provided, only add when both US30Y and US3M
-          are selected in Assets Management.
-        - If selected_asset_names is None, add whenever both columns exist in
-          the aligned matrix.
-
-        Important:
-        - TermSpread is always computed from raw input series loaded by `_load_raw`,
-          so it is independent of yield pricing engines (bond/cash).
-        """
-        required_cols = {"US30Y", "US3M"}
-        if not required_cols.issubset(set(portfolio_df.columns)):
-            logger.info("Skip TermSpread: missing US30Y or US3M in aligned matrix.")
-            return portfolio_df
-
-        if selected_asset_names is not None and not required_cols.issubset(
-            selected_asset_names
-        ):
-            logger.info(
-                "Skip TermSpread: US30Y and US3M are not both selected in Assets Management."
-            )
-            return portfolio_df
-
-        try:
-            us30y_raw = self._load_raw(sanitize_filename("US30Y"))
-            us3m_raw = self._load_raw(sanitize_filename("US3M"))
-        except FileNotFoundError as e:
-            logger.warning(f"Skip TermSpread: raw source file missing. {e}")
-            return portfolio_df
-
-        # Align raw yields to the final aligned matrix index.
-        us30y_aligned = us30y_raw.reindex(portfolio_df.index)
-        us3m_aligned = us3m_raw.reindex(portfolio_df.index)
-        portfolio_df["TermSpread"] = us30y_aligned - us3m_aligned
-        logger.info("Derived feature added: TermSpread = raw(US30Y) - raw(US3M)")
-        return portfolio_df
-
     def process_and_align(
         self,
         assets: List[Dict[str, Any]],
         output_filename: str = "aligned_assets.csv",
-        selected_asset_names: Optional[Set[str]] = None,
     ) -> str:
         """Full ETL pipeline: build aligned DataFrame and persist to CSV.
+
+        TermSpread is no longer auto-derived here — the FRED series T10Y2Y
+        (10Y-2Y spread) is loaded directly as a macro asset and provides a
+        cleaner, official version of the same signal.
 
         Args:
             assets: Asset configuration list.
@@ -190,10 +278,6 @@ class DataProcessor:
         """
         try:
             portfolio_df = self.build_aligned_dataframe(assets)
-            portfolio_df = self._maybe_add_term_spread(
-                portfolio_df,
-                selected_asset_names=selected_asset_names,
-            )
             output_file = os.path.join(self.processed_path, output_filename)
             portfolio_df.to_csv(output_file)
             logger.info(f"Aligned assets saved successfully to: {output_file}")

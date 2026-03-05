@@ -231,6 +231,14 @@ pip install -r requirements.txt
 ### 1. Data Setup
 
 1. Configure assets via the Web UI (**Assets Management** tab) or by editing `config/assets.json` directly.
+   - For FRED macro series, configure release availability to avoid look-ahead bias:
+     - `release_rule`: `none` | `next_thursday` | `third_thursday_same_month` | `calendar_lag`
+     - `release_lag_days`: integer calendar-day lag (used by `calendar_lag`)
+   - Recommended defaults:
+     - `JOBLESS_CLAIMS` → `next_thursday`
+     - `PhillyFed` → `third_thursday_same_month`
+     - `M2_YoY` → `calendar_lag` with `release_lag_days: 35`
+   - Note: this handles publication lag alignment only; historical revisions still require ALFRED real-time vintages.
 2. Download raw data:
 
    ```bash

@@ -340,6 +340,11 @@
                   class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
                   <span class="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>Baostock
                 </button>
+                <hr class="border-gray-600 my-1">
+                <button type='button' data-source='fred'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-red-400 inline-block"></span>FRED (Macro)
+                </button>
               </div>
             </div>
             <button type='button' id='process-assets-btn' class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-sm transition-colors">Process Data</button>
@@ -359,6 +364,9 @@
                     <th>Name</th>
                     <th>Ticker</th>
                     <th>Kind</th>
+                    <th>Frequency</th>
+                    <th>Release Rule</th>
+                    <th>Lag Days</th>
                     <th>Engine</th>
                     <th>Data Start</th>
                     <th>Data End</th>
@@ -380,7 +388,32 @@
                   <select id='asset_kind'>
                     <option value='price'>price</option>
                     <option value='yield'>yield</option>
+                    <option value='macro'>macro</option>
                   </select>
+                </div>
+                <div>
+                  <label>Frequency</label>
+                  <select id='asset_frequency'>
+                    <option value='d'>daily (d)</option>
+                    <option value='m'>monthly (m)</option>
+                    <option value='q'>quarterly (q)</option>
+                    <option value='a'>annual (a)</option>
+                    <option value='w'>weekly (w)</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Release Rule (macro)</label>
+                  <select id='asset_release_rule'>
+                    <option value=''>Auto / None</option>
+                    <option value='none'>none</option>
+                    <option value='next_thursday'>next_thursday</option>
+                    <option value='third_thursday_same_month'>third_thursday_same_month</option>
+                    <option value='calendar_lag'>calendar_lag</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Release Lag Days (macro)</label>
+                  <input type='number' id='asset_release_lag_days' min='0' step='1' placeholder='e.g. 35'>
                 </div>
                 <div>
                   <label>Engine</label>
@@ -673,6 +706,20 @@
       }
     }
 
+    function updateReleaseLagEnabled() {
+      const ruleEl = document.getElementById('asset_release_rule');
+      const lagEl = document.getElementById('asset_release_lag_days');
+      if (!ruleEl || !lagEl) return;
+
+      const needsLag = ruleEl.value === 'calendar_lag';
+      lagEl.disabled = !needsLag;
+      if (!needsLag && lagEl.value === '') {
+        lagEl.placeholder = 'Only for calendar_lag';
+      } else if (needsLag) {
+        lagEl.placeholder = 'e.g. 35';
+      }
+    }
+
     // Setup Drag and Drop
     document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.dropzone').forEach(zone => {
@@ -702,9 +749,11 @@
         updateModelPathEnabled();
       };
       document.getElementById('model_type').onchange = updateModelPathEnabled;
+      document.getElementById('asset_release_rule').onchange = updateReleaseLagEnabled;
 
       updateTrendModelEnabled();
       updateModelPathEnabled();
+      updateReleaseLagEnabled();
 
       // ── Split-button: download source selector ─────────────────────────
       const toggleBtn = document.getElementById('download-source-toggle');
@@ -722,7 +771,7 @@
         opt.addEventListener('click', () => {
           const src = opt.dataset.source;
           toggleBtn.dataset.selected = src;
-          const labelMap = { auto: 'Auto', yahoo: 'Yahoo', akshare: 'AkShare', baostock: 'Baostock' };
+          const labelMap = { auto: 'Auto', yahoo: 'Yahoo', akshare: 'AkShare', baostock: 'Baostock', fred: 'FRED' };
           document.getElementById('download-source-label').textContent = labelMap[src] || src;
           menu.classList.add('hidden');
         });
@@ -746,9 +795,20 @@
 
         const tbody = document.querySelector('#assets-table tbody');
         tbody.innerHTML = '';
+        const frequencyLabelMap = {
+          d: 'Daily',
+          w: 'Weekly',
+          m: 'Monthly',
+          q: 'Quarterly',
+          a: 'Annual',
+        };
         assets.forEach(a => {
           const tr = document.createElement('tr');
           const isDerived = !!a.derived;
+          const normalizedFreq = (a.frequency || '').toLowerCase();
+          const freqLabel = frequencyLabelMap[normalizedFreq] || (a.frequency || '-');
+          const releaseRule = a.release_rule || '-';
+          const releaseLagDays = (a.release_lag_days === 0 || a.release_lag_days) ? a.release_lag_days : '-';
           tr.innerHTML = `
             <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}" ${isDerived ? 'disabled title="Derived asset: no raw download/process selection"' : ''}></td>
             <td>
@@ -756,6 +816,9 @@
             </td>
             <td>${a.ticker}</td>
             <td>${a.kind}</td>
+            <td>${freqLabel}</td>
+            <td>${releaseRule}</td>
+            <td>${releaseLagDays}</td>
             <td>${a.engine || '-'}</td>
             <td>${a.data_start_date || '-'}</td>
             <td>${a.data_end_date || '-'}</td>
@@ -773,9 +836,16 @@
               document.getElementById('asset_name').value = a.name;
               document.getElementById('asset_ticker').value = a.ticker;
               document.getElementById('asset_kind').value = a.kind;
+              document.getElementById('asset_frequency').value = (a.frequency || 'd').toLowerCase();
+              document.getElementById('asset_release_rule').value = a.release_rule || '';
+              document.getElementById('asset_release_lag_days').value =
+                (a.release_lag_days === 0 || a.release_lag_days)
+                  ? String(a.release_lag_days)
+                  : '';
               document.getElementById('asset_engine').value = a.engine || '';
               document.getElementById('asset_duration').value = a.duration || '';
               document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
+              updateReleaseLagEnabled();
             };
 
             tr.querySelector('.delete-asset').onclick = async () => {
@@ -844,10 +914,14 @@
     async function saveAsset(e) {
       e.preventDefault();
       const originalName = document.getElementById('asset_original_name').value || null;
+      const releaseLagRaw = document.getElementById('asset_release_lag_days').value;
       const payload = {
         name: document.getElementById('asset_name').value.trim(),
         ticker: document.getElementById('asset_ticker').value.trim(),
         kind: document.getElementById('asset_kind').value,
+        frequency: document.getElementById('asset_frequency').value || null,
+        release_rule: document.getElementById('asset_release_rule').value || null,
+        release_lag_days: releaseLagRaw === '' ? null : parseInt(releaseLagRaw, 10),
         engine: document.getElementById('asset_engine').value || null,
         duration: document.getElementById('asset_duration').value ? parseFloat(document.getElementById('asset_duration').value) : null,
         initial_start_date: document.getElementById('asset_initial_start_date').value || "1985-01-02"
@@ -922,15 +996,7 @@
     }
 
     async function processAssets() {
-      const checkboxes = Array.from(document.querySelectorAll('.asset-select-checkbox'));
-      const selectedNames = checkboxes.filter(cb => cb.checked).map(cb => cb.getAttribute('data-name'));
-
-      if (selectedNames.length === 0) {
-        alert('Please select at least one asset in Assets Management before Process Data.');
-        return;
-      }
-
-      if (!confirm('Start processing and aligning data? (Alignment uses all configured assets; selected assets control derived TermSpread generation)')) return;
+      if (!confirm('Start processing and aligning data? This will delete the existing aligned_assets.csv and rebuild from ALL downloaded data files.')) return;
       const btn = document.getElementById('process-assets-btn');
       const originalText = btn.textContent;
       btn.disabled = true;
@@ -940,7 +1006,7 @@
         const res = await fetch('/api/assets/process', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ names: selectedNames }),
+          body: JSON.stringify({}),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -1185,9 +1251,13 @@
       document.getElementById('asset_name').value = '';
       document.getElementById('asset_ticker').value = '';
       document.getElementById('asset_kind').value = 'price';
+      document.getElementById('asset_frequency').value = 'd';
+      document.getElementById('asset_release_rule').value = '';
+      document.getElementById('asset_release_lag_days').value = '';
       document.getElementById('asset_engine').value = '';
       document.getElementById('asset_duration').value = '';
       document.getElementById('asset_initial_start_date').value = '1985-01-02';
+      updateReleaseLagEnabled();
     };
 
     document.getElementById('load-config-btn').onclick = handleLoadConfig;

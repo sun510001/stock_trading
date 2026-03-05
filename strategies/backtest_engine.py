@@ -63,6 +63,7 @@ class BacktestEngine:
         vol_scale_lookback: int = 0,
         momentum_threshold: float = 0.0,
         use_sharpe_weighting: bool = False,
+        min_blend: float = 0.0,
     ) -> None:
         """Execute the backtest simulation by delegating trade logic to ``rebalance_fn``.
 
@@ -328,6 +329,7 @@ class BacktestEngine:
                     vol_scale_lookback=vol_scale_lookback,
                     momentum_threshold=momentum_threshold,
                     use_sharpe_weighting=use_sharpe_weighting,
+                    min_blend=min_blend,
                 )
 
                 result: RebalanceResult = rebalance_fn(ctx)

@@ -84,6 +84,10 @@ class BacktestConfig(BaseModel):
         default=False,
         description="If True, allocation weights are proportional to Sharpe-proxy (return / vol) instead of raw cumulative return.",
     )
+    min_blend: float = Field(
+        default=0.0,
+        description="Minimum momentum blend ratio [0,1]. Even at the lowest trend score the portfolio holds at least this fraction of momentum weights. Guards against out-of-sample model false-negatives. 0.0 = unconstrained soft-gate.",
+    )
     use_trend_model: bool = Field(
         default=False,
         description="Whether to enable the unsupervised trend model to gate rebalancing",
@@ -206,6 +210,7 @@ class BacktestService:
             vol_scale_lookback=cfg.vol_scale_lookback,
             momentum_threshold=cfg.momentum_threshold,
             use_sharpe_weighting=cfg.use_sharpe_weighting,
+            min_blend=cfg.min_blend,
         )
 
         stats = strategy.get_performance_stats(
