@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from logger import logger
 from data_loader.yahoo_downloader import YahooIncrementalLoader
 from data_loader.fred_downloader import _expand_low_frequency_to_daily_with_ffill
@@ -168,13 +168,65 @@ class DataProcessor:
         price_series = initial_price * (1 + daily_ret).cumprod()
         return price_series
 
+    # Preferred reference assets for trading calendar (checked in priority order)
+    _CALENDAR_REFERENCE_PRIORITY: List[str] = [
+        "Nasdaq100", "SP500", "Dow", "Russell2000",
+        "7_10Y_Treasury_ETF", "20Y_Treasury_ETF",
+    ]
+
+    def _build_reference_trading_calendar(
+        self,
+        prices: Dict[str, pd.Series],
+        macro_names: List[str],
+    ) -> Optional[pd.DatetimeIndex]:
+        """Derive a reference trading-day calendar from loaded daily price assets.
+
+        Iterates through a priority list (Nasdaq100 first) and returns the
+        non-NaN index of the first matching asset.  Falls back to the union
+        of all non-macro series if none of the preferred assets are loaded.
+
+        Args:
+            prices: Dict mapping asset name to its price/value Series.
+            macro_names: Names of low-frequency macro series to exclude from
+                calendar derivation.
+
+        Returns:
+            Sorted DatetimeIndex of trading days, or None if no reference
+            series is available.
+        """
+        for preferred in self._CALENDAR_REFERENCE_PRIORITY:
+            if preferred in prices and preferred not in macro_names:
+                idx = prices[preferred].dropna().index
+                if len(idx) > 0:
+                    logger.info(
+                        f"Trading calendar reference: '{preferred}' "
+                        f"({len(idx)} trading days)"
+                    )
+                    return pd.DatetimeIndex(sorted(set(idx)))
+
+        # Fallback: union of all non-macro daily price series
+        non_macro = {k: v for k, v in prices.items() if k not in macro_names}
+        if non_macro:
+            combined_idx: pd.DatetimeIndex = pd.DatetimeIndex([])
+            for s in non_macro.values():
+                combined_idx = combined_idx.union(s.dropna().index)
+            logger.info(
+                f"Trading calendar reference: union of {len(non_macro)} "
+                f"non-macro series ({len(combined_idx)} unique days)"
+            )
+            return combined_idx.sort_values()
+
+        return None
+
     def build_aligned_dataframe(self, assets: List[Dict[str, Any]]) -> pd.DataFrame:
         """Build aligned price matrix for given assets and return as DataFrame.
 
-        全量对齐矩阵中允许存在 NaN；只去掉整行全空的日期。具体的“木桶式裁剪”
+        全量对齐矩阵中允许存在 NaN；只去掉整行全空的日期。具体的"木桶式裁剪"
         会在回测阶段按本次使用的资产子集进行。"""
         logger.info("Starting Multi-Asset Data Processing & Alignment (in-memory)...")
         prices: Dict[str, pd.Series] = {}
+        # Track low-frequency macro series that need re-alignment to the trading calendar
+        low_freq_macro_names: List[str] = []
 
         for asset in assets:
             name = asset["name"]
@@ -202,6 +254,8 @@ class DataProcessor:
                             f"Expanding macro '{name}' ({freq}) to daily via forward-fill..."
                         )
                         prices[name] = _expand_low_frequency_to_daily_with_ffill(raw_series)
+                        # Mark for later re-alignment to the equity trading calendar
+                        low_freq_macro_names.append(name)
                     else:
                         # Already daily (freq=='d') or unknown — use as-is.
                         prices[name] = raw_series
@@ -237,6 +291,61 @@ class DataProcessor:
 
         if not prices:
             raise ValueError("No assets were successfully processed.")
+
+        # ── Re-align low-frequency macro series to the equity trading calendar ──
+        # Replaces the initial calendar-daily expansion (which includes weekends
+        # and holidays) with a series indexed exactly on the reference asset's
+        # trading days.  Forward-fill carries the last known release value into
+        # every subsequent trading day until the next observation arrives.
+        if low_freq_macro_names:
+            ref_index = self._build_reference_trading_calendar(prices, low_freq_macro_names)
+            if ref_index is not None:
+                for macro_name in low_freq_macro_names:
+                    if macro_name not in prices:
+                        continue
+                    original_len = len(prices[macro_name])
+                    prices[macro_name] = (
+                        prices[macro_name]
+                        .reindex(ref_index)
+                        .ffill()
+                    )
+                    logger.info(
+                        f"Low-freq macro '{macro_name}' re-indexed to trading calendar: "
+                        f"{original_len} calendar days → {len(prices[macro_name])} trading days."
+                    )
+            else:
+                logger.warning(
+                    "No reference trading calendar found; low-frequency macro series "
+                    "retain calendar-daily expansion."
+                )
+
+        # ── Derived indicator: Net Liquidity ──────────────────────────────────
+        # Net Liquidity = WALCL - WTREGEN - RRPONTSYD
+        # Only computed when all three component series are present and non-empty.
+        _NET_LIQ_COMPONENTS = ("WALCL", "WTREGEN", "RRPONTSYD")
+        if all(k in prices and not prices[k].empty for k in _NET_LIQ_COMPONENTS):
+            walcl = prices["WALCL"]
+            wtregen = prices["WTREGEN"]
+            rrpontsyd = prices["RRPONTSYD"]
+            # Align on the union index before computing to handle any remaining
+            # offset differences between the three series.
+            combined = pd.concat(
+                [walcl.rename("WALCL"), wtregen.rename("WTREGEN"), rrpontsyd.rename("RRPONTSYD")],
+                axis=1,
+            ).ffill()
+            net_liq = combined["WALCL"] - combined["WTREGEN"] - combined["RRPONTSYD"]
+            net_liq.name = "Net_Liquidity"
+            prices["Net_Liquidity"] = net_liq
+            logger.info(
+                "Derived indicator 'Net_Liquidity' created: WALCL - WTREGEN - RRPONTSYD "
+                f"({net_liq.notna().sum()} non-NaN rows)."
+            )
+        else:
+            missing = [k for k in _NET_LIQ_COMPONENTS if k not in prices or prices[k].empty]
+            if missing:
+                logger.info(
+                    f"Net_Liquidity not computed: missing component(s) {missing}."
+                )
 
         portfolio_df = pd.DataFrame(prices)
         # Ensure the index is a proper DatetimeIndex, monotonically increasing,
