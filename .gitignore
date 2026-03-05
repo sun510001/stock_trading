@@ -69,3 +69,5 @@ strategies/*
 !strategies/backtest_engine.py
 .cursorrules
 assets.json
+
+*.csv

@@ -28,9 +28,24 @@ from data_loader.yahoo_downloader import YahooIncrementalLoader
 from data_loader.akshare_downloader import AkshareIncrementalLoader
 from data_loader.baostock_downloader import BaostockIncrementalLoader
 from data_loader.data_processor import DataProcessor
+from data_loader.fred_downloader import FREDIncrementalLoader, MACRO_SERIES
 from utils.naming import sanitize_filename
+from logger import logger
 
 app = FastAPI(title="Backtest API", version="1.0.0")
+
+_ALLOWED_RELEASE_RULES = {
+    "none",
+    "next_thursday",
+    "third_thursday_same_month",
+    "calendar_lag",
+}
+
+_DEFAULT_MACRO_RELEASE_CONFIG: Dict[str, Dict[str, Any]] = {
+    "JOBLESS_CLAIMS": {"release_rule": "next_thursday", "release_lag_days": 0},
+    "PhillyFed": {"release_rule": "third_thursday_same_month", "release_lag_days": 0},
+    "M2_YoY": {"release_rule": "calendar_lag", "release_lag_days": 35},
+}
 
 
 class AssetModels:
@@ -38,6 +53,13 @@ class AssetModels:
         name: str = Field(..., description="Logical name of the asset")
         ticker: str = Field(..., description="Yahoo Finance ticker symbol")
         kind: str = Field(..., description="Asset data type: 'price' or 'yield'")
+        frequency: Optional[str] = Field(
+            None,
+            description=(
+                "Data frequency code: 'd' (daily), 'm' (monthly), "
+                "'q' (quarterly), 'a' (annual), optionally 'w' (weekly)."
+            ),
+        )
         engine: Optional[str] = Field(
             None, description="Pricing engine for yields: 'bond' or 'cash'"
         )
@@ -49,6 +71,20 @@ class AssetModels:
         )
         description: Optional[str] = Field(
             "", description="A short introduction or description for the asset"
+        )
+        release_rule: Optional[str] = Field(
+            None,
+            description=(
+                "Macro availability alignment rule: 'none', 'next_thursday', "
+                "'third_thursday_same_month', or 'calendar_lag'."
+            ),
+        )
+        release_lag_days: Optional[int] = Field(
+            None,
+            description=(
+                "Calendar-day publication lag used by 'calendar_lag'. "
+                "Ignored by other rules."
+            ),
         )
 
     class AssetWithMeta(AssetConfig):
@@ -78,24 +114,97 @@ class APIManager:
         self._ui_html: Optional[str] = None
 
     def get_ui_html(self) -> str:
-        if self._ui_html is None:
-            ui_path = os.path.join(project_root, "backend", "ui.html")
-            with open(ui_path, "r", encoding="utf-8") as f:
-                self._ui_html = f.read()
-        return self._ui_html
+        ui_path = os.path.join(project_root, "backend", "ui.html")
+        with open(ui_path, "r", encoding="utf-8") as f:
+            return f.read()
 
 
 manager = APIManager()
 
 
+def _is_macro_asset(asset: Dict[str, Any]) -> bool:
+    """Check whether an asset should be treated as a macro indicator.
+
+    Args:
+        asset: Asset configuration dictionary.
+
+    Returns:
+        bool: True if the asset is macro/FRED, otherwise False.
+    """
+    return asset.get("kind") == "macro" or asset.get("source") == "fred"
+
+
+def _normalize_macro_release_fields(asset: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize and validate macro release-alignment fields.
+
+    This function ensures API writes remain consistent even if UI omits macro
+    alignment fields. For non-macro assets, these fields are removed.
+
+    Args:
+        asset: Raw asset dictionary to be persisted.
+
+    Returns:
+        Dict[str, Any]: A normalized copy ready for persistence.
+
+    Raises:
+        HTTPException: If release rule or lag value is invalid.
+    """
+    normalized = dict(asset)
+    if not _is_macro_asset(normalized):
+        normalized.pop("release_rule", None)
+        normalized.pop("release_lag_days", None)
+        return normalized
+
+    defaults = _DEFAULT_MACRO_RELEASE_CONFIG.get(str(normalized.get("name", "")), {})
+    raw_rule = normalized.get("release_rule", defaults.get("release_rule", "none"))
+    rule = str(raw_rule).strip().lower() if raw_rule is not None else "none"
+
+    if rule not in _ALLOWED_RELEASE_RULES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid release_rule '{raw_rule}'. "
+                f"Allowed: {sorted(_ALLOWED_RELEASE_RULES)}"
+            ),
+        )
+
+    raw_lag = normalized.get("release_lag_days", defaults.get("release_lag_days", 0))
+    if raw_lag in (None, ""):
+        lag_days = 0
+    else:
+        try:
+            lag_days = int(raw_lag)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"release_lag_days must be an integer, got: {raw_lag}",
+            ) from exc
+
+    if lag_days < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="release_lag_days must be >= 0",
+        )
+
+    normalized["release_rule"] = rule
+    normalized["release_lag_days"] = lag_days
+    return normalized
+
+
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+}
+
+
 @app.get("/", response_class=HTMLResponse)
-def root_endpoint() -> str:
-    return manager.get_ui_html()
+def root_endpoint() -> HTMLResponse:
+    return HTMLResponse(content=manager.get_ui_html(), headers=_NO_CACHE_HEADERS)
 
 
 @app.get("/ui", response_class=HTMLResponse)
-def ui_endpoint() -> str:
-    return manager.get_ui_html()
+def ui_endpoint() -> HTMLResponse:
+    return HTMLResponse(content=manager.get_ui_html(), headers=_NO_CACHE_HEADERS)
 
 
 @app.get("/api/algorithms")
@@ -106,11 +215,29 @@ def list_algorithms() -> List[Dict[str, str]]:
     ]
 
 
+def _resolve_asset_csv_path(asset: Dict[str, Any], data_dir: str, macro_dir: str) -> str:
+    """Resolve the local CSV path for an asset based on its source/kind metadata.
+
+    Args:
+        asset: Asset configuration dictionary loaded from ``assets.json``.
+        data_dir: Absolute path to the standard asset CSV directory.
+        macro_dir: Absolute path to the macro/FRED CSV directory.
+
+    Returns:
+        Absolute CSV file path for the asset.
+    """
+    safe_name = sanitize_filename(asset["name"])
+    is_macro = asset.get("kind") == "macro" or asset.get("source") == "fred"
+    base_dir = macro_dir if is_macro else data_dir
+    return os.path.join(base_dir, f"{safe_name}.csv")
+
+
 @app.get("/api/assets", response_model=List[AssetModels.AssetWithMeta])
 def get_assets() -> List[AssetModels.AssetWithMeta]:
     assets = AssetConfigManager.load_assets()
     results: List[AssetModels.AssetWithMeta] = []
     data_dir = os.path.join(project_root, "data")
+    macro_dir = os.path.join(project_root, "data", "macro")
 
     # 尝试读取已处理对齐矩阵，以标记哪些资产已进入 aligned_assets.csv
     aligned_path = os.path.join(project_root, "data_processed", "aligned_assets.csv")
@@ -123,8 +250,7 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
             aligned_cols = []
 
     for asset in assets:
-        safe_name = sanitize_filename(asset["name"])
-        csv_path = os.path.join(data_dir, f"{safe_name}.csv")
+        csv_path = _resolve_asset_csv_path(asset, data_dir=data_dir, macro_dir=macro_dir)
         d_start, d_end = None, None
         source = asset.get("source", None)
         if os.path.exists(csv_path):
@@ -190,9 +316,10 @@ def create_asset(asset: AssetModels.AssetConfig) -> AssetModels.AssetWithMeta:
         raise HTTPException(
             status_code=400, detail=f"Asset '{asset.name}' already exists."
         )
-    assets.append(asset.model_dump())
+    normalized = _normalize_macro_release_fields(asset.model_dump())
+    assets.append(normalized)
     AssetConfigManager.save_assets(assets)
-    return AssetModels.AssetWithMeta(**asset.model_dump())
+    return AssetModels.AssetWithMeta(**normalized)
 
 
 @app.put("/api/assets/{name}", response_model=AssetModels.AssetWithMeta)
@@ -216,6 +343,18 @@ def update_asset(name: str, asset: AssetModels.AssetConfig) -> AssetModels.Asset
             # Preserve existing description if the update doesn't provide a new one
             if "description" in a and not new_data.get("description"):
                 new_data["description"] = a["description"]
+
+            # Preserve existing frequency if client omitted it.
+            if "frequency" in a and not new_data.get("frequency"):
+                new_data["frequency"] = a["frequency"]
+
+            # Preserve existing macro release alignment fields if omitted by UI.
+            if "release_rule" in a and not new_data.get("release_rule"):
+                new_data["release_rule"] = a.get("release_rule")
+            if "release_lag_days" in a and new_data.get("release_lag_days") is None:
+                new_data["release_lag_days"] = a.get("release_lag_days")
+
+            new_data = _normalize_macro_release_fields(new_data)
 
             assets[i] = new_data
             AssetConfigManager.save_assets(assets)
@@ -244,6 +383,27 @@ class DownloadRequest(BaseModel):
             "Force a specific download backend: 'yahoo', 'akshare', 'baostock', or None/'auto' "
             "for the default smart-routing behaviour."
         ),
+    )
+
+
+class MacroDownloadRequest(BaseModel):
+    """Request body for FRED macro series download."""
+
+    names: Optional[List[str]] = Field(
+        None,
+        description="Series names to download (as in MACRO_SERIES[*]['name']); if None, download all.",
+    )
+    storage_path: Optional[str] = Field(
+        None,
+        description="Override storage path for per-series CSVs; defaults to data/macro.",
+    )
+    build_csv: bool = Field(
+        True,
+        description="Whether to merge downloaded series into aligned macro CSV after download.",
+    )
+    output_path: str = Field(
+        "data_processed/macro_indicators.csv",
+        description="Output path for the merged macro CSV (relative to project root).",
     )
 
 
@@ -290,13 +450,22 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
         akshare_loader = AkshareIncrementalLoader(storage_path=data_path)
         baostock_loader = BaostockIncrementalLoader(storage_path=data_path)
 
-        # Forced downloader override: 'yahoo' | 'akshare' | 'baostock' | None (auto)
+        # Forced downloader override: 'yahoo' | 'akshare' | 'baostock' | 'fred' | 'auto'
         forced_dl = (req.downloader or "auto").strip().lower()
-        if forced_dl not in ("yahoo", "akshare", "baostock", "auto"):
+        if forced_dl not in ("yahoo", "akshare", "baostock", "fred", "auto"):
             forced_dl = "auto"
         logger.info(f"Download mode: {forced_dl.upper()}")
 
         updated_assets = False
+
+        # Initialise FRED loader lazily (only if fred assets are in the selection)
+        _fred_loader = None
+        def _get_fred_loader() -> FREDIncrementalLoader:
+            nonlocal _fred_loader
+            if _fred_loader is None:
+                macro_path = os.path.join(project_root, "data", "macro")
+                _fred_loader = FREDIncrementalLoader(storage_path=macro_path)
+            return _fred_loader
 
         for asset in assets:
             name = asset["name"]
@@ -308,6 +477,50 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
 
             known_source = asset.get("source")
             success = False
+
+            # ── FRED MACRO ASSETS ─────────────────────────────────────────────
+            is_macro = known_source == "fred" or asset.get("kind") == "macro"
+            if is_macro or forced_dl == "fred":
+                if not is_macro and forced_dl == "fred":
+                    # 用户强制选择 FRED 模式，但当前资产不是宏观指标，直接跳过
+                    logger.info(f"[FRED] Skipping non-macro asset '{name}' in FRED-only mode.")
+                    continue
+                logger.info(f"[FRED] Downloading macro series: {name} ({ticker})")
+                # Priority: asset-level setting > MACRO_SERIES default > native frequency.
+                freq = (
+                    str(asset.get("frequency")).strip().lower()
+                    if asset.get("frequency")
+                    else next(
+                        (s.get("frequency") for s in MACRO_SERIES if s["name"] == name),
+                        None,
+                    )
+                )
+                if freq in {"day", "daily"}:
+                    freq = "d"
+                elif freq in {"month", "monthly"}:
+                    freq = "m"
+                elif freq in {"quarter", "quarterly"}:
+                    freq = "q"
+                elif freq in {"year", "yearly", "annual"}:
+                    freq = "a"
+                elif freq in {"week", "weekly"}:
+                    freq = "w"
+                elif freq not in {"d", "w", "m", "q", "a", None}:
+                    freq = None
+                try:
+                    _get_fred_loader().download_series(
+                        series_id=ticker,
+                        name=name,
+                        start_date_fallback=start_fallback,
+                        frequency=freq,
+                    )
+                    success = True
+                except Exception as fred_err:
+                    logger.warning(f"FRED download failed for {name} ({ticker}): {fred_err}")
+                    success = False
+                if not success:
+                    logger.warning(f"Failed to download FRED series {name} ({ticker}).")
+                continue  # 跳过 yahoo/akshare/baostock 路由
 
             # ── FORCED MODE ───────────────────────────────────────────────────
             if forced_dl != "auto":
@@ -416,11 +629,97 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
                         full_a["source"] = sel_a["source"]
             AssetConfigManager.save_assets(full_assets)
 
-        manager.last_download_ts = time.time()
-        return {"detail": "Smart batch download complete."}
     except Exception as e:
-        logger.exception("Download fault")
-        raise HTTPException(status_code=500, detail=f"System error: {str(e)}")
+        logger.error(f"Asset download failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "ok"}
+
+
+@app.get("/api/macro/series")
+def list_macro_series_endpoint() -> List[Dict[str, Any]]:
+    """List all pre-defined FRED macro series with local data coverage info.
+
+    Returns:
+        List of dicts, each containing series metadata plus:
+        - data_start_date: earliest date in local CSV (or None)
+        - data_end_date:   latest date in local CSV (or None)
+        - row_count:       number of rows in local CSV (or 0)
+    """
+    macro_storage = os.path.join(project_root, "data", "macro")
+    result = []
+    for s in MACRO_SERIES:
+        entry: Dict[str, Any] = dict(s)
+        csv_path = os.path.join(macro_storage, f"{sanitize_filename(s['name'])}.csv")
+        if os.path.isfile(csv_path):
+            try:
+                df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                entry["data_start_date"] = str(df.index.min().date()) if not df.empty else None
+                entry["data_end_date"] = str(df.index.max().date()) if not df.empty else None
+                entry["row_count"] = len(df)
+            except Exception:
+                entry["data_start_date"] = None
+                entry["data_end_date"] = None
+                entry["row_count"] = 0
+        else:
+            entry["data_start_date"] = None
+            entry["data_end_date"] = None
+            entry["row_count"] = 0
+        result.append(entry)
+    return result
+
+
+@app.post("/api/macro/download")
+def download_macro_endpoint(req: MacroDownloadRequest) -> Dict[str, Any]:
+    """Download selected FRED macro series and optionally build aligned macro CSV.
+
+    Args:
+        req: MacroDownloadRequest with names, storage_path, build_csv, output_path.
+
+    Returns:
+        Dict with 'downloaded', 'skipped', 'output_path' (if build_csv) keys.
+    """
+    try:
+        storage_path = (
+            os.path.join(project_root, req.storage_path)
+            if req.storage_path
+            else os.path.join(project_root, "data", "macro")
+        )
+        loader = FREDIncrementalLoader(storage_path=storage_path)
+
+        if req.names:
+            series_to_dl = [s for s in MACRO_SERIES if s["name"] in req.names]
+            if not series_to_dl:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"None of the requested names matched MACRO_SERIES: {req.names}",
+                )
+        else:
+            series_to_dl = MACRO_SERIES
+
+        logger.info(f"FRED download triggered for: {[s['name'] for s in series_to_dl]}")
+        loader.download_batch(series_to_dl)
+
+        response: Dict[str, Any] = {"downloaded": [s["name"] for s in series_to_dl]}
+
+        if req.build_csv:
+            output_abs = (
+                os.path.join(project_root, req.output_path)
+                if not os.path.isabs(req.output_path)
+                else req.output_path
+            )
+            df = loader.build_aligned_macro_csv(series_to_dl, output_path=output_abs)
+            response["output_path"] = output_abs
+            response["rows"] = len(df)
+            logger.info(f"Aligned macro CSV saved to {output_abs} ({len(df)} rows)")
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Macro download failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/assets/process")
@@ -428,9 +727,9 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
     """Process and align data for **all** configured assets.
 
     说明:
-    - 对齐矩阵始终基于 config/assets.json 的全部资产构建。
-    - 若 UI 传入勾选资产 names，且其中同时包含 US30Y 与 US3M，
-      则自动在 aligned_assets.csv 中派生 TermSpread 列。
+    - 先删除已有的 aligned_assets.csv，再从所有已下载数据重新构建。
+    - 忽略 UI 传入的勾选资产列表，始终处理全部配置资产。
+    - 若 US30Y 和 US3M 均存在，自动派生 TermSpread 列。
     """
     assets = AssetConfigManager.load_assets()
     if not assets:
@@ -438,9 +737,9 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
             status_code=400, detail="No assets configured for processing."
         )
 
-    selected_names: Optional[set[str]] = None
-    if req.names:
-        selected_names = set(req.names)
+    aligned_path = os.path.join(project_root, "data_processed", "aligned_assets.csv")
+    if os.path.exists(aligned_path):
+        os.remove(aligned_path)
 
     try:
         processor = DataProcessor(
@@ -450,7 +749,6 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
         full_path = processor.process_and_align(
             assets,
             output_filename="aligned_assets.csv",
-            selected_asset_names=selected_names,
         )
 
         return {
