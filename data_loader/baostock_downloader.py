@@ -23,11 +23,27 @@ _BS_UNSUPPORTED: frozenset = frozenset({
     "H30533",          # China Internet 50 (custom H-prefix index)
 })
 
-# A-share index / ETF codes that belong to Shanghai exchange (SSE)
-# 000016 / 000300 / 000688 / 000699 → SSE composite/sector indices listed on sh
-# 9xxxxx codes (e.g. 932000, 931722, 980092) → CSI/SZSE cross-market → sz prefix
-_SSE_INDEX_PREFIXES = re.compile(r"^00[0-9]")   # 000xxx are SSE indices
-_SZSE_CODES = re.compile(r"^(9[0-9]{5}|H[0-9A-Z]{5}|[135][0-9]{5})$")
+# Exchange routing rules for 6-digit A-share codes:
+#
+#   sh (Shanghai / SSE):
+#     - 6xxxxx  : SSE A-share stocks (e.g. 600000 ICBC)
+#     - 51xxxx  : SSE ETFs (510xxx government-bond ETFs, 511xxx treasury ETFs,
+#                 512xxx sector ETFs, 515xxx-519xxx various)
+#     - 000xxx  : SSE composite / sector indices as used in Baostock
+#                 (e.g. 000001 Shanghai Composite, 000016 SSE50, 000300 CSI300,
+#                  000688 STAR50).  NB: SZSE stocks also share the 000xxx
+#                 namespace, but in this project all 000xxx codes come from
+#                 akshare_index and represent exchange indices → route to sh.
+#
+#   sz (Shenzhen / SZSE):
+#     - 159xxx  : SZSE ETFs (e.g. 159531 CSI2000 ETF, 159201 FCF ETF)
+#     - 0xxxxx (non-000xxx), 1xxxxx (non-159xxx), 2xxxxx, 3xxxxx : SZSE stocks
+#     - 9xxxxx  : CSI cross-market indices hosted in Baostock's SZSE partition
+#                 (e.g. 932000 CSI2000 index — currently unsupported)
+#     - H[0-9A-Z]{5} : CSI custom indices with H-prefix
+
+_SSE_ETF_RE = re.compile(r"^51\d{4}$")          # 510xxx–519xxx live on SSE
+_SSE_INDEX_RE = re.compile(r"^00[0-9]\d{3}$")   # 000xxx–009xxx SSE indices
 
 
 class BaostockIncrementalLoader:
@@ -90,10 +106,18 @@ class BaostockIncrementalLoader:
         # 6-digit pure numeric
         if re.match(r"^\d{6}$", raw):
             if raw.startswith("6"):
+                # SSE A-share stocks (e.g. 600000, 601318)
                 return f"sh.{raw}"
-            else:
-                # 0, 1, 2, 3, 5, 9xxxxx all live on SZSE in Baostock
-                return f"sz.{raw}"
+            if _SSE_ETF_RE.match(raw):
+                # SSE ETFs: 510xxx–519xxx (e.g. 511090 CN30Y ETF, 512800 CSI Banks ETF)
+                return f"sh.{raw}"
+            if _SSE_INDEX_RE.match(raw):
+                # SSE composite / sector indices: 000xxx–009xxx
+                # (e.g. 000016 SSE50, 000300 CSI300, 000688 STAR50)
+                return f"sh.{raw}"
+            # All remaining 6-digit codes → SZSE
+            # Includes: 159xxx SZSE ETFs, 0/1/2/3xxxxx SZSE stocks, 9xxxxx CSI cross-market
+            return f"sz.{raw}"
 
         # 6-char starting with H  (CSI cross-market indices like H30269, H30533)
         if re.match(r"^H\d{5}$", raw, re.IGNORECASE):

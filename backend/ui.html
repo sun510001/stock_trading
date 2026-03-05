@@ -90,12 +90,16 @@
     .top-layout { display:flex; flex-direction:column; gap:16px; }
     .bottom-layout { display:flex; flex-direction:column; gap:16px; }
     @media (min-width: 1024px) {
-      .top-layout { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; align-items:stretch; }
+      .top-layout { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; align-items:start; }
     }
-    .top-layout .panel { height:100%; display: flex; flex-direction: column; }
+    .top-layout .panel { display: flex; flex-direction: column; }
     table { width:100%; border-collapse:collapse; margin-top:8px; font-size:12px; }
     th, td { border:1px solid #333; padding:4px 6px; text-align:left; }
     th { background:#222; position: sticky; top: 0; z-index: 10; }
+    th[data-sort-key] { cursor:pointer; user-select:none; white-space:nowrap; }
+    th[data-sort-key]:hover { background:#2a2a2a; }
+    th[data-sort-key] .sort-indicator { margin-left:4px; font-size:10px; color:#666; }
+    th[data-sort-key].sort-active .sort-indicator { color:#0af; }
 
     /* Toggle switch for trend model */
     .toggle-wrapper { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; }
@@ -143,7 +147,7 @@
     <div class='main-layout'>
       <div class='top-layout'>
         <!-- LEFT: Configuration Panel -->
-        <div class='panel self-start'>
+        <div id='config-panel' class='panel self-start'>
           <div class="flex items-center justify-between mb-4 border-b border-gray-700 pb-2">
             <h2 class="text-lg font-bold">Configuration</h2>
           </div>
@@ -305,7 +309,7 @@
         </div>
 
         <!-- RIGHT: Assets Management -->
-        <div class='panel'>
+        <div id='assets-panel' class='panel' style='overflow:hidden;'>
           <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Assets Management</h2>
           <div class="flex gap-2 mb-4 items-center">
             <button type='button' id='refresh-assets-btn' class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm transition-colors">Refresh List</button>
@@ -361,15 +365,16 @@
                 <thead>
                   <tr>
                     <th style="width:32px; text-align:center;">Sel</th>
-                    <th>Name</th>
-                    <th>Ticker</th>
-                    <th>Kind</th>
-                    <th>Frequency</th>
-                    <th>Release Rule</th>
-                    <th>Lag Days</th>
-                    <th>Engine</th>
-                    <th>Data Start</th>
-                    <th>Data End</th>
+                    <th data-sort-key="name">Name<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="ticker">Ticker<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="downloader">Source<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="kind">Kind<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="frequency">Frequency<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="release_rule">Release Rule<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="release_lag_days">Lag Days<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="engine">Engine<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="data_start_date">Data Start<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="data_end_date">Data End<span class="sort-indicator">⇕</span></th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -425,6 +430,16 @@
                 </div>
                 <div><label>Initial Start Date</label><input type='date' id='asset_initial_start_date' value='1985-01-02'></div>
                 <div><label>Duration (for bond)</label><input type='number' step='0.1' id='asset_duration' placeholder="20.0"></div>
+                <div>
+                  <label>Downloader</label>
+                  <select id='asset_downloader'>
+                    <option value=''>Auto (inferred from kind/source)</option>
+                    <option value='yahoo'>Yahoo Finance</option>
+                    <option value='akshare'>AkShare</option>
+                    <option value='baostock'>Baostock</option>
+                    <option value='fred'>FRED (Macro)</option>
+                  </select>
+                </div>
                 <div class="col-span-2 flex gap-2 pt-2">
                   <button type='submit' id='save-asset-btn' class="flex-1 bg-green-700 hover:bg-green-600 text-white font-bold py-2 rounded transition-colors text-sm">Save Asset</button>
                   <button type='button' id='new-asset-btn' class="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 rounded transition-colors text-sm">Clear Form</button>
@@ -461,6 +476,9 @@
     let allAssetsList = [];
     let lastBacktestPayload = null;
     const STORAGE_KEY = 'backtest_asset_selection_v1';
+    // Table sort state
+    let _tableSortKey = null;   // column key currently sorted by, or null (default order)
+    let _tableSortAsc = true;   // true = ascending, false = descending
 
     async function loadAlgorithms() {
       try {
@@ -786,6 +804,136 @@
 
     }); // end DOMContentLoaded
 
+    // ── Table sort: click column header to sort ─────────────────────────────
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('#assets-table th[data-sort-key]').forEach(th => {
+        th.addEventListener('click', () => {
+          const key = th.dataset.sortKey;
+          if (_tableSortKey === key) {
+            _tableSortAsc = !_tableSortAsc;
+          } else {
+            _tableSortKey = key;
+            _tableSortAsc = true;
+          }
+          // Update visual indicators
+          document.querySelectorAll('#assets-table th[data-sort-key]').forEach(h => {
+            h.classList.remove('sort-active');
+            h.querySelector('.sort-indicator').textContent = '⇕';
+          });
+          th.classList.add('sort-active');
+          th.querySelector('.sort-indicator').textContent = _tableSortAsc ? '▲' : '▼';
+          renderAssetsTable(allAssetsList);
+        });
+      });
+    });
+
+    /** Render the assets tbody with optional sorting applied.
+     * @param {Array} assets - Full list of asset objects from the API.
+     */
+    function renderAssetsTable(assets) {
+      const tbody = document.querySelector('#assets-table tbody');
+      tbody.innerHTML = '';
+      const frequencyLabelMap = {
+        d: 'Daily',
+        w: 'Weekly',
+        m: 'Monthly',
+        q: 'Quarterly',
+        a: 'Annual',
+      };
+      const DL_BADGE = {
+        yahoo:    { color: 'bg-blue-600',   label: 'Yahoo' },
+        akshare:  { color: 'bg-yellow-600', label: 'AkShare' },
+        baostock: { color: 'bg-purple-600', label: 'Baostock' },
+        fred:     { color: 'bg-red-600',    label: 'FRED' },
+      };
+
+      // Apply sort if a sort key is active
+      let ordered = [...assets];
+      if (_tableSortKey) {
+        ordered.sort((a, b) => {
+          let va = a[_tableSortKey] ?? '';
+          let vb = b[_tableSortKey] ?? '';
+          // Treat null/undefined as empty string for text, or -Infinity for numbers
+          if (typeof va === 'number' && typeof vb === 'number') {
+            return _tableSortAsc ? va - vb : vb - va;
+          }
+          va = String(va).toLowerCase();
+          vb = String(vb).toLowerCase();
+          if (va < vb) return _tableSortAsc ? -1 : 1;
+          if (va > vb) return _tableSortAsc ? 1 : -1;
+          return 0;
+        });
+      }
+
+      ordered.forEach(a => {
+        const tr = document.createElement('tr');
+        const isDerived = !!a.derived;
+        const normalizedFreq = (a.frequency || '').toLowerCase();
+        const freqLabel = frequencyLabelMap[normalizedFreq] || (a.frequency || '-');
+        const releaseRule = a.release_rule || '-';
+        const releaseLagDays = (a.release_lag_days === 0 || a.release_lag_days) ? a.release_lag_days : '-';
+        const dlKey = (a.downloader || '').toLowerCase();
+        const dlInfo = DL_BADGE[dlKey] || { color: 'bg-gray-600', label: dlKey || 'Auto' };
+        const dlBadge = `<span class="${dlInfo.color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded">${dlInfo.label}</span>`;
+        tr.innerHTML = `
+          <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}" ${isDerived ? 'disabled title="Derived asset: no raw download/process selection"' : ''}></td>
+          <td>
+            ${a.description ? `<div class="table-tooltip-container">${a.name}<div class="table-tooltip">${a.description}</div></div>` : a.name}
+          </td>
+          <td>${a.ticker}</td>
+          <td>${dlBadge}</td>
+          <td>${a.kind}</td>
+          <td>${freqLabel}</td>
+          <td>${releaseRule}</td>
+          <td>${releaseLagDays}</td>
+          <td>${a.engine || '-'}</td>
+          <td>${a.data_start_date || '-'}</td>
+          <td>${a.data_end_date || '-'}</td>
+          <td class="flex gap-1">
+            ${isDerived
+              ? "<span class='text-[10px] text-gray-400 px-2 py-1'>DERIVED</span>"
+              : "<button type='button' class='edit-asset bg-gray-700 hover:bg-gray-600 px-2 py-1 text-[10px]'>EDIT</button><button type='button' class='delete-asset bg-red-900 hover:bg-red-800 px-2 py-1 text-[10px]'>DEL</button>"
+            }
+          </td>
+        `;
+
+        if (!isDerived) {
+          tr.querySelector('.edit-asset').onclick = () => {
+            document.getElementById('asset_original_name').value = a.name;
+            document.getElementById('asset_name').value = a.name;
+            document.getElementById('asset_ticker').value = a.ticker;
+            document.getElementById('asset_kind').value = a.kind;
+            document.getElementById('asset_frequency').value = (a.frequency || 'd').toLowerCase();
+            document.getElementById('asset_release_rule').value = a.release_rule || '';
+            document.getElementById('asset_release_lag_days').value =
+              (a.release_lag_days === 0 || a.release_lag_days)
+                ? String(a.release_lag_days)
+                : '';
+            document.getElementById('asset_engine').value = a.engine || '';
+            document.getElementById('asset_duration').value = a.duration || '';
+            document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
+            document.getElementById('asset_downloader').value = (a.downloader || '').toLowerCase();
+            updateReleaseLagEnabled();
+          };
+
+          tr.querySelector('.delete-asset').onclick = async () => {
+            if (!confirm(`Delete asset '${a.name}'?`)) return;
+            const res = await fetch(`/api/assets/${encodeURIComponent(a.name)}`, { method: 'DELETE' });
+            if (res.ok) loadAssets(); else alert('Delete failed');
+          };
+        }
+
+        tbody.appendChild(tr);
+      });
+
+      if (lastSavedAssetName) {
+        const checkbox = document.querySelector(`.asset-select-checkbox[data-name="${lastSavedAssetName}"]`);
+        if (checkbox) checkbox.checked = true;
+      }
+      // Sync panel heights after table renders
+      requestAnimationFrame(syncPanelHeights);
+    }
+
     async function loadAssets() {
       try {
         const res = await fetch('/api/assets');
@@ -793,75 +941,7 @@
         allAssetsList = assets;
         updateAssetPool();
 
-        const tbody = document.querySelector('#assets-table tbody');
-        tbody.innerHTML = '';
-        const frequencyLabelMap = {
-          d: 'Daily',
-          w: 'Weekly',
-          m: 'Monthly',
-          q: 'Quarterly',
-          a: 'Annual',
-        };
-        assets.forEach(a => {
-          const tr = document.createElement('tr');
-          const isDerived = !!a.derived;
-          const normalizedFreq = (a.frequency || '').toLowerCase();
-          const freqLabel = frequencyLabelMap[normalizedFreq] || (a.frequency || '-');
-          const releaseRule = a.release_rule || '-';
-          const releaseLagDays = (a.release_lag_days === 0 || a.release_lag_days) ? a.release_lag_days : '-';
-          tr.innerHTML = `
-            <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}" ${isDerived ? 'disabled title="Derived asset: no raw download/process selection"' : ''}></td>
-            <td>
-              ${a.description ? `<div class="table-tooltip-container">${a.name}<div class="table-tooltip">${a.description}</div></div>` : a.name}
-            </td>
-            <td>${a.ticker}</td>
-            <td>${a.kind}</td>
-            <td>${freqLabel}</td>
-            <td>${releaseRule}</td>
-            <td>${releaseLagDays}</td>
-            <td>${a.engine || '-'}</td>
-            <td>${a.data_start_date || '-'}</td>
-            <td>${a.data_end_date || '-'}</td>
-            <td class="flex gap-1">
-              ${isDerived
-                ? "<span class='text-[10px] text-gray-400 px-2 py-1'>DERIVED</span>"
-                : "<button type='button' class='edit-asset bg-gray-700 hover:bg-gray-600 px-2 py-1 text-[10px]'>EDIT</button><button type='button' class='delete-asset bg-red-900 hover:bg-red-800 px-2 py-1 text-[10px]'>DEL</button>"
-              }
-            </td>
-          `;
-
-          if (!isDerived) {
-            tr.querySelector('.edit-asset').onclick = () => {
-              document.getElementById('asset_original_name').value = a.name;
-              document.getElementById('asset_name').value = a.name;
-              document.getElementById('asset_ticker').value = a.ticker;
-              document.getElementById('asset_kind').value = a.kind;
-              document.getElementById('asset_frequency').value = (a.frequency || 'd').toLowerCase();
-              document.getElementById('asset_release_rule').value = a.release_rule || '';
-              document.getElementById('asset_release_lag_days').value =
-                (a.release_lag_days === 0 || a.release_lag_days)
-                  ? String(a.release_lag_days)
-                  : '';
-              document.getElementById('asset_engine').value = a.engine || '';
-              document.getElementById('asset_duration').value = a.duration || '';
-              document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
-              updateReleaseLagEnabled();
-            };
-
-            tr.querySelector('.delete-asset').onclick = async () => {
-              if (!confirm(`Delete asset '${a.name}'?`)) return;
-              const res = await fetch(`/api/assets/${encodeURIComponent(a.name)}`, { method: 'DELETE' });
-              if (res.ok) loadAssets(); else alert('Delete failed');
-            };
-          }
-
-          tbody.appendChild(tr);
-        });
-
-        if (lastSavedAssetName) {
-          const checkbox = document.querySelector(`.asset-select-checkbox[data-name="${lastSavedAssetName}"]`);
-          if (checkbox) checkbox.checked = true;
-        }
+        renderAssetsTable(allAssetsList);
 
         try {
           const saved = localStorage.getItem(STORAGE_KEY);
@@ -924,7 +1004,8 @@
         release_lag_days: releaseLagRaw === '' ? null : parseInt(releaseLagRaw, 10),
         engine: document.getElementById('asset_engine').value || null,
         duration: document.getElementById('asset_duration').value ? parseFloat(document.getElementById('asset_duration').value) : null,
-        initial_start_date: document.getElementById('asset_initial_start_date').value || "1985-01-02"
+        initial_start_date: document.getElementById('asset_initial_start_date').value || "1985-01-02",
+        downloader: document.getElementById('asset_downloader').value || null,
       };
 
       if (!payload.name || !payload.ticker) { alert('Name and Ticker are required'); return; }
@@ -1267,6 +1348,23 @@
     loadAssets();
     loadTrendModels();
     loadSavedConfigs();
+
+    // Sync Assets Management panel height to match Configuration panel height
+    function syncPanelHeights() {
+      const configPanel = document.getElementById('config-panel');
+      const assetsPanel = document.getElementById('assets-panel');
+      if (!configPanel || !assetsPanel) return;
+      if (window.innerWidth >= 1024) {
+        const h = configPanel.offsetHeight;
+        assetsPanel.style.height = h + 'px';
+      } else {
+        assetsPanel.style.height = '';
+      }
+    }
+
+    window.addEventListener('resize', syncPanelHeights);
+    // Initial sync after full page render
+    requestAnimationFrame(() => requestAnimationFrame(syncPanelHeights));
   </script>
 </body>
 </html>
