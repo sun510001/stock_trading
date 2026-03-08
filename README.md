@@ -9,6 +9,15 @@ Designed for long-term asset allocation research (e.g., momentum-based, volatili
 <details>
 <summary><strong>Changelog</strong></summary>
 
+- **2026-03-08**
+  - Added `torch_regression` as a first-class runtime trend-model type across the backend config model, engine integration, and Web UI.
+  - Upgraded `GET /api/trend_models` to support `model_type` filtering and cleaner discovery of persisted PyTorch artifacts.
+  - Added `fill_residual_with_safe` to the backtest config / UI so target-volatility residual weight can be explicitly routed into safe assets instead of remaining as cash.
+  - Added richer rebalance diagnostics from strategy to engine logs: each rebalance now records decision metadata such as `mode`, risk/safe/cash split, blend ratio, selected asset count, and `residual_to_safe`.
+  - Introduced `utils/csv_utils.py::load_date_indexed_csv()` and switched backend asset inspection plus `BacktestEngine` CSV loading to the shared parser. This centralises compatibility for legacy CSV layouts where `Date` may be misplaced or unnamed.
+  - Updated aligned-data export to write `index_label="Date"`, preventing future ambiguity in generated CSV files.
+  - Switched default long-duration benchmark / safe-bucket references from `US30Y` to `20Y_Treasury_ETF` in the service layer, CLI examples, and UI defaults.
+
 - **2026-03-03**
   - Fixed a JavaScript scoping bug in `ui.html`: the `DOMContentLoaded` callback was never closed, causing all UI handler functions (`loadAssets`, `saveAsset`, `downloadAssets`, `processAssets`, `runBacktest`) to be defined in an unreachable scope. The asset list was permanently empty.
   - Standardised CSV format across all three downloaders to `Date,Open,High,Low,Close,Volume` (Date as index, exactly 5 data columns). AkShare and Baostock `_normalise()` now explicitly drop any extra columns (e.g. Chinese-named trading columns).
@@ -77,11 +86,14 @@ project_root/
 │   └── data_processor.py     # Yield-to-price engines and multi-asset alignment
 │
 ├── strategies/
+│   ├── algorithms.py            # Runtime rebalance implementations
 │   ├── backtest_engine.py       # Core simulation engine: time loop + bookkeeping only
+│   ├── trend_models.py          # Runtime trend-model loaders and wrappers
 │   ├── algorithms_template.py   # Public template: how to write a custom rebalance function
 │   └── trend_models_template.py # Public template: how to implement a custom trend model
 │
 ├── utils/
+│   ├── csv_utils.py    # Shared CSV loader for legacy / mixed date-index layouts
 │   ├── decorators.py   # Generic decorators (e.g., @retry)
 │   ├── naming.py       # Asset name sanitization helpers
 │   └── tools.py        # Timezone and date utility functions
@@ -96,8 +108,8 @@ project_root/
 └── README.md
 ```
 
-> **Note:** `strategies/algorithms.py` and `strategies/trend_models.py` are symlinks to
-> `.private_data/` and are not tracked by Git. Use the `*_template.py` files as
+> **Note:** In some local setups, `strategies/algorithms.py` and `strategies/trend_models.py`
+> may be provided through a private runtime layer. Use the `*_template.py` files as
 > the public reference for the interface contracts.
 
 ---
@@ -127,6 +139,9 @@ class RebalanceContext:
     vol_scale_lookback: int     # short window for vol scaling; 0 = use full vol_lookback
     momentum_threshold: float   # min cumulative return to pass absolute-momentum filter
     use_sharpe_weighting: bool  # if True, weight ∝ Sharpe-proxy instead of raw return
+    min_blend: float            # minimum risk-on blend ratio under soft ML gating
+    fill_residual_with_safe: bool  # if True, park unused weight in safe assets
+    candidate_indices: List[int]   # candidate-column mapping into the full universe
     safe_asset_indices: List[int]
     col_names: List[str]
 
@@ -135,6 +150,7 @@ class RebalanceContext:
 class RebalanceResult:
     new_units: np.ndarray  # target units after rebalance
     new_cash: float        # remaining cash after trades & fees
+    decision_info: Dict[str, str]  # optional diagnostic metadata for logs
 ```
 
 `BacktestEngine` handles only the time loop, data windowing, ML score computation, and bookkeeping. **All trading decisions live inside `rebalance_fn`.**
@@ -164,13 +180,15 @@ The engine discovers the right method via `hasattr` in the following priority or
   - `vol_scale_lookback` — short trailing window for vol estimation in the scaling layer; `0` = use `vol_lookback`
   - `momentum_threshold` — minimum cumulative return required for an asset to pass the absolute-momentum filter
   - `use_sharpe_weighting` — if `True`, allocation weights are proportional to Sharpe-proxy (return / vol)
+  - `min_blend` — minimum soft-gate risk allocation even when the trend model turns bearish
+  - `fill_residual_with_safe` — when enabled, residual target-volatility capacity is parked in safe assets instead of cash
 
 ### `backend/api.py` — REST Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/algorithms` | List auto-discovered rebalance strategies |
-| `GET` | `/api/trend_models` | List available persisted model files (`.pkl` / `.pt`) |
+| `GET` | `/api/trend_models` | List available persisted model folders / files; supports `model_type` filtering |
 | `GET` | `/api/assets` | List configured assets with local data status |
 | `POST` | `/api/assets` | Create an asset configuration |
 | `PUT` | `/api/assets/{name}` | Update an asset configuration |
@@ -182,12 +200,32 @@ The engine discovers the right method via `hasattr` in the following priority or
 | `GET` | `/api/configs/best/{filename}` | Load and return a specific saved config |
 | `POST` | `/api/configs/best` | Save the current backtest config as a YAML file |
 
+### `backend/ui.html` — Interactive Web Console
+
+- **Trend-model picker**: supports `torch_regression` and compatible persisted model artifacts.
+- **Dynamic model discovery**: reloads model options when `trend_model_type` changes and preserves the currently selected folder when compatible.
+- **Positioning controls**: exposes `fill_residual_with_safe` alongside volatility-targeting controls so the user can choose between fully allocated risk/safe mixes and residual-cash behavior.
+- **Updated defaults**: aligns the UI safe-asset defaults with the service layer by using `20Y_Treasury_ETF`, `GoldIndex`, and `US3M`.
+
+### `strategies/backtest_engine.py` — Execution Engine
+
+- **Shared CSV ingestion**: now uses `utils.csv_utils.load_date_indexed_csv()` so legacy aligned files are normalised before slicing or plotting.
+- **Expanded runtime context**: forwards `fill_residual_with_safe` into `RebalanceContext`, enabling strategies to decide whether unused volatility budget should remain cash or park in safe assets.
+- **Decision-aware logs**: consumes `RebalanceResult.decision_info` and prints per-rebalance diagnostics alongside exposure and holdings, making risk/safe/cash transitions auditable from the log stream.
+
 ### `data_loader/data_processor.py` — DataProcessor
 
 - **`bond_pricing_engine`**: Converts a yield series to a synthetic total-return price series using a duration-based approximation.
 - **`cash_pricing_engine`**: Converts a short-rate yield series to a cumulative cash return series.
 - **Alignment**: Builds the price matrix with `dropna(how="all")`, preserving partial-data dates. Final trimming is deferred to the backtest layer.
+- **CSV output contract**: Writes aligned files with an explicit `Date` index label so downstream readers can round-trip the matrix safely.
 - **`TermSpread` derivation**: When both `US30Y` and `US3M` columns are present in the aligned file, a `TermSpread` column (US30Y − US3M, in yield space) is automatically appended.
+
+### `utils/csv_utils.py` — Shared CSV Compatibility Loader
+
+- **`load_date_indexed_csv()`**: Accepts three common layouts: `Date` as the first column, `Date` as a later named column, or an unnamed index column produced by `to_csv(index=True)`.
+- **Index hygiene**: Coerces the index to `DatetimeIndex`, drops invalid `NaT` rows, removes duplicates, sorts chronologically, and normalises the index name back to `Date`.
+- **Runtime usage**: Shared by `backend/api.py` asset inspection and `strategies/backtest_engine.py` so legacy data quirks are handled consistently in both the UI and backtest engine.
 
 ### `data_loader/` — Incremental Downloaders
 
@@ -302,7 +340,9 @@ See `strategies/trend_models_template.py` for the interface contract and a minim
 - **`Download Data` vs `Process Data`**:
   - `Download Data` operates only on the assets you have selected in the UI. The split-button lets you force a specific source (Auto / Yahoo / AkShare / Baostock).
   - `Process Data` always rebuilds `aligned_assets.csv` from *all* assets defined in `config/assets.json`.
-- **`algorithms.py` not found**: The file is a symlink to `.private_data/algorithms.py` and is not tracked by Git. Use `strategies/algorithms_template.py` as a starting point and place your implementation in `.private_data/algorithms.py`.
-- **Supported Trend Model Types**: `kmeans_simple`, `kmeans_window`, `random_forest`, `torch_mlp`.
+- **`algorithms.py` not found**: In some local setups this file is provided through a private runtime layer. Use `strategies/algorithms_template.py` as the interface reference and place your implementation in your local runtime module.
+- **Supported Trend Model Types**: `kmeans_simple`, `kmeans_window`, `random_forest`, `torch_mlp`, `window_transformer`, `torch_regression`.
+- **Model Selection in UI**: for persisted PyTorch models, the UI accepts a compatible model folder or primary artifact path, depending on how the runtime layer stores model artifacts.
+- **Residual Cash vs Safe Assets**: `fill_residual_with_safe=true` turns the strategy into a fully allocated risk/safe mix; disabling it restores the original behavior where volatility-targeting can leave residual cash uninvested.
 - **CSV format**: All raw per-asset files under `data/` use the format `Date,Open,High,Low,Close,Volume` with `Date` as the row index. Files in the old format (Date as last column) are automatically normalised on the next incremental download.
 - **Baostock limitations**: Tickers for HK-connect indices, very new indices, or custom cross-border indices may not be available in Baostock's database. These are listed in `_BS_UNSUPPORTED` in `baostock_downloader.py` and will be skipped with a warning; use Yahoo Finance or AkShare for those assets instead.

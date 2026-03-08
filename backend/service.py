@@ -30,7 +30,7 @@ class BacktestConfig(BaseModel):
     initial_capital: float = Field(100_000.0, description="Initial portfolio capital")
     fees: float = Field(0.0005, description="Transaction fee rate")
     benchmark_cols: List[str] = Field(
-        default_factory=lambda: ["Nasdaq100", "GoldIndex", "US30Y", "US3M"],
+        default_factory=lambda: ["Nasdaq100", "GoldIndex", "20Y_Treasury_ETF", "US3M"],
         description="Benchmark columns for comparison",
     )
     rebalance_interval_days: int = Field(
@@ -49,7 +49,7 @@ class BacktestConfig(BaseModel):
         ),
     )
     safe_assets: Optional[List[str]] = Field(
-        default=["US30Y", "GoldIndex", "US3M"],
+        default=["20Y_Treasury_ETF", "GoldIndex", "US3M"],
         description="Optional list of assets to shift to when risk-off (if None, shift to Cash)",
     )
     top_k: int = Field(
@@ -88,17 +88,24 @@ class BacktestConfig(BaseModel):
         default=0.0,
         description="Minimum momentum blend ratio [0,1]. Even at the lowest trend score the portfolio holds at least this fraction of momentum weights. Guards against out-of-sample model false-negatives. 0.0 = unconstrained soft-gate.",
     )
+    fill_residual_with_safe: bool = Field(
+        default=True,
+        description="If True, route unused portfolio weight into the configured safe assets instead of leaving it as cash.",
+    )
     use_trend_model: bool = Field(
         default=False,
         description="Whether to enable the unsupervised trend model to gate rebalancing",
     )
     trend_model_type: str = Field(
         default="kmeans_simple",
-        description="Trend model type: 'kmeans_simple', 'kmeans_window', 'random_forest', or 'torch_mlp'",
+        description=(
+            "Trend model type: 'kmeans_simple', 'kmeans_window', 'random_forest', "
+            "'torch_mlp', 'window_transformer', or 'torch_regression'"
+        ),
     )
     model_path: Optional[str] = Field(
         default=None,
-        description="Relative path to a persisted trend model (.pkl or .pt) under project root",
+        description="Relative path to a persisted trend model file or run folder under project root",
     )
     model_lookback_days: int = Field(
         default=60,
@@ -211,6 +218,7 @@ class BacktestService:
             momentum_threshold=cfg.momentum_threshold,
             use_sharpe_weighting=cfg.use_sharpe_weighting,
             min_blend=cfg.min_blend,
+            fill_residual_with_safe=cfg.fill_residual_with_safe,
         )
 
         stats = strategy.get_performance_stats(

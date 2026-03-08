@@ -65,7 +65,7 @@ class BacktestRunner:
             safe_assets: Assets to hold during risk-off periods.
         """
         if benchmarks is None:
-            benchmarks = ['Nasdaq100', 'GoldIndex', 'US30Y', 'US3M', 'SP500']
+            benchmarks = ['Nasdaq100', 'GoldIndex', '20Y_Treasury_ETF', 'US3M', 'SP500']
 
         if not os.path.exists(self.data_file):
             logger.error(f"Data file not found: {self.data_file}")
@@ -170,7 +170,7 @@ if __name__ == "__main__":
         top_k=3,
         target_volatility=0.15,
         vol_lookback=60,
-        safe_assets=["US30Y", "GoldIndex", "US3M"],
+        safe_assets=["20Y_Treasury_ETF", "GoldIndex", "US3M"],
     )
 
     # 示例3：永久组合策略（等权重）

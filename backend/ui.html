@@ -238,6 +238,7 @@
                         <option value='kmeans_window'>kmeans_window</option>
                         <option value='random_forest'>random_forest</option>
                         <option value='torch_mlp'>torch_mlp</option>
+                        <option value='torch_regression'>torch_regression</option>
                       </select>
                     </div>
                     <div>
@@ -247,7 +248,7 @@
                   </div>
                   <div class="grid grid-cols-2 gap-3">
                     <div>
-                      <label>Model File (.pkl)</label>
+                      <label>Model Folder</label>
                       <select id='model_path'>
                         <option value=''>[none]</option>
                       </select>
@@ -295,6 +296,10 @@
                   <div class="flex items-center gap-2 pt-4">
                     <input type='checkbox' id='use_sharpe_weighting' class="w-4 h-4 accent-blue-500">
                     <label class="mb-0">Sharpe Weighting</label>
+                  </div>
+                  <div class="flex items-center gap-2 pt-4">
+                    <input type='checkbox' id='fill_residual_with_safe' class="w-4 h-4 accent-blue-500" checked>
+                    <label class="mb-0">Fill Residual With Safe Assets</label>
                   </div>
                 </div>
               </div>
@@ -495,23 +500,43 @@
       } catch (e) { console.error('Failed to load algorithms', e); }
     }
 
-    async function loadTrendModels() {
+    async function loadTrendModels(modelType = '', preferredValue = '') {
       try {
-        const res = await fetch('/api/trend_models');
+        const query = modelType ? `?model_type=${encodeURIComponent(modelType)}` : '';
+        const res = await fetch(`/api/trend_models${query}`);
         const models = await res.json();
-        const select = document.getElementById('model_path');
-        if (!select) return;
-
-        select.innerHTML = '';
-
-        models.forEach(m => {
-          const opt = document.createElement('option');
-          opt.value = m.key;
-          opt.textContent = m.label;
-          select.appendChild(opt);
-        });
+        populateTrendModelOptions(models, preferredValue);
       } catch (e) {
         console.error('Failed to load trend models', e);
+        populateTrendModelOptions([], '');
+      }
+    }
+
+    function populateTrendModelOptions(models, preferredValue = '') {
+      const select = document.getElementById('model_path');
+      if (!select) return;
+
+      const currentValue = preferredValue || select.value;
+      const filteredModels = Array.isArray(models) ? models : [];
+
+      select.innerHTML = '';
+
+      const noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = filteredModels.length ? '[none]' : '[no compatible model folders found]';
+      select.appendChild(noneOpt);
+
+      filteredModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.key;
+        opt.textContent = m.label;
+        select.appendChild(opt);
+      });
+
+      if (filteredModels.some(m => m.key === currentValue)) {
+        select.value = currentValue;
+      } else {
+        select.value = '';
       }
     }
 
@@ -558,9 +583,11 @@
         }
         if (cfg.trend_model_type) document.getElementById('model_type').value = cfg.trend_model_type;
         if (cfg.model_lookback_days) document.getElementById('model_lookback_days').value = cfg.model_lookback_days;
-        if (cfg.model_path) document.getElementById('model_path').value = cfg.model_path;
         if (cfg.model_threshold !== undefined) document.getElementById('model_threshold').value = cfg.model_threshold;
         updateModelPathEnabled();
+        if (cfg.trend_model_type) {
+          await loadTrendModels(cfg.trend_model_type, cfg.model_path || '');
+        }
 
         if (cfg.top_k !== undefined) document.getElementById('top_k').value = cfg.top_k;
         if (cfg.target_volatility !== undefined) document.getElementById('target_volatility').value = cfg.target_volatility;
@@ -570,6 +597,7 @@
         if (cfg.vol_scale_lookback !== undefined) document.getElementById('vol_scale_lookback').value = cfg.vol_scale_lookback;
         if (cfg.momentum_threshold !== undefined) document.getElementById('momentum_threshold').value = cfg.momentum_threshold;
         if (cfg.use_sharpe_weighting !== undefined) document.getElementById('use_sharpe_weighting').checked = cfg.use_sharpe_weighting;
+        if (cfg.fill_residual_with_safe !== undefined) document.getElementById('fill_residual_with_safe').checked = cfg.fill_residual_with_safe;
 
         // Restore Assets to Dropzones
         const stratZone = document.getElementById('strategy-dropzone');
@@ -716,11 +744,13 @@
       const modelPathSelect = document.getElementById('model_path');
       if (!modelPathSelect) return;
 
-      if (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp') {
+      if (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp' || modelType === 'window_transformer' || modelType === 'torch_regression') {
         modelPathSelect.disabled = false;
+        loadTrendModels(modelType, modelPathSelect.value || '');
       } else {
         modelPathSelect.disabled = true;
         modelPathSelect.value = '';
+        populateTrendModelOptions([], '');
       }
     }
 
@@ -1123,10 +1153,10 @@
       const modelPathEl = document.getElementById('model_path');
       const modelPathVal = modelPathEl && modelPathEl.value ? modelPathEl.value : '';
 
-      if (useTrend && (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp') && !modelPathVal) {
+      if (useTrend && (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp' || modelType === 'window_transformer' || modelType === 'torch_regression') && !modelPathVal) {
         loading.classList.add('hidden');
         runBtn.disabled = false;
-        errorMsg.textContent = 'Please select a Model File when using ' + modelType + '.';
+        errorMsg.textContent = 'Please select a Model Folder when using ' + modelType + '.';
         errorMsg.style.display = 'block';
         return;
       }
@@ -1172,7 +1202,7 @@
         initial_capital: parseFloat(document.getElementById('initial_capital').value),
         candidate_assets: selectedAssetCols.length > 0 ? selectedAssetCols : null,
         benchmark_cols: selectedBenchmarkCols,
-        safe_assets: selectedSafeCols.length > 0 ? selectedSafeCols : ["US30Y", "GoldIndex", "US3M"],
+        safe_assets: selectedSafeCols.length > 0 ? selectedSafeCols : ["20Y_Treasury_ETF", "GoldIndex", "US3M"],
         rebalance_interval_days: document.getElementById('rebalance_interval_days').value
           ? parseInt(document.getElementById('rebalance_interval_days').value)
           : null,
@@ -1207,6 +1237,7 @@
           ? parseFloat(document.getElementById('momentum_threshold').value)
           : 0.0,
         use_sharpe_weighting: document.getElementById('use_sharpe_weighting').checked,
+        fill_residual_with_safe: document.getElementById('fill_residual_with_safe').checked,
       };
 
       try {
@@ -1346,7 +1377,6 @@
 
     loadAlgorithms();
     loadAssets();
-    loadTrendModels();
     loadSavedConfigs();
 
     // Sync Assets Management panel height to match Configuration panel height
