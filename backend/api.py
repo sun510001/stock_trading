@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+import json
 import os
+import re
 import sys
 import time
 from typing import List, Optional, Dict, Any
@@ -30,6 +32,7 @@ from data_loader.baostock_downloader import BaostockIncrementalLoader
 from data_loader.data_processor import DataProcessor
 from data_loader.fred_downloader import FREDIncrementalLoader, MACRO_SERIES
 from utils.naming import sanitize_filename
+from utils.csv_utils import load_date_indexed_csv
 from logger import logger
 
 app = FastAPI(title="Backtest API", version="1.0.0")
@@ -46,6 +49,45 @@ _DEFAULT_MACRO_RELEASE_CONFIG: Dict[str, Dict[str, Any]] = {
     "PhillyFed": {"release_rule": "third_thursday_same_month", "release_lag_days": 0},
     "M2_YoY": {"release_rule": "calendar_lag", "release_lag_days": 35},
 }
+
+_TREND_MODEL_DIRS: Dict[str, List[str]] = {
+    "kmeans_window": ["kmeans_window"],
+    "random_forest": ["random_forest"],
+    "torch_mlp": ["search"],
+    "window_transformer": ["search"],
+    "torch_regression": ["search"],
+}
+
+_TREND_MODEL_EXTS: Dict[str, tuple[str, ...]] = {
+    "kmeans_window": (".pkl",),
+    "random_forest": (".pkl",),
+    "torch_mlp": (".pt",),
+    "window_transformer": (".pt",),
+    "torch_regression": (".pt",),
+}
+
+
+def _read_training_run_manifest(run_dir: str) -> Optional[Dict[str, Any]]:
+    """Load run metadata for a directory-based model artifact."""
+    manifest_path = os.path.join(run_dir, "training_run.json")
+    if not os.path.isfile(manifest_path):
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _manifest_matches_model_type(manifest: Dict[str, Any], model_type: str) -> bool:
+    """Return whether a run manifest is compatible with the requested UI filter."""
+    family = str(manifest.get("model_family", "")).strip()
+    if model_type in ("torch_mlp", "window_transformer"):
+        return family in {"torch_mlp", "window_transformer"}
+    if model_type == "torch_regression":
+        return family == "window_regression"
+    return family == model_type
 
 
 class AssetModels:
@@ -251,8 +293,8 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
     aligned_cols: List[str] = []
     if os.path.exists(aligned_path):
         try:
-            aligned_df = pd.read_csv(aligned_path, nrows=1)
-            aligned_cols = [str(c) for c in aligned_df.columns if c != "Date"]
+            aligned_df = load_date_indexed_csv(aligned_path).head(1)
+            aligned_cols = [str(c) for c in aligned_df.columns]
         except Exception:
             aligned_cols = []
 
@@ -262,16 +304,7 @@ def get_assets() -> List[AssetModels.AssetWithMeta]:
         source = asset.get("source", None)
         if os.path.exists(csv_path):
             try:
-                with open(csv_path, 'r') as _f:
-                    _header = _f.readline().strip().split(',')
-                if _header[0] != 'Date' and 'Date' in _header:
-                    # Legacy broken format: Date as last column
-                    _df = pd.read_csv(csv_path)
-                    _df['Date'] = pd.to_datetime(_df['Date'])
-                    df = _df.set_index('Date')
-                else:
-                    df = pd.read_csv(csv_path, index_col="Date", parse_dates=True)
-                df = df[df.index.notna()]
+                df = load_date_indexed_csv(csv_path)
                 if not df.empty:
                     d_start = df.index.min().date().isoformat()
                     d_end = df.index.max().date().isoformat()
@@ -807,23 +840,99 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
 
 
 @app.get("/api/trend_models")
-def list_trend_models() -> List[Dict[str, str]]:
-    """Scan .private_data/models for .pkl and .pt files."""
+def list_trend_models(
+    model_type: Optional[str] = Query(
+        default=None,
+        description="Optional trend model type used to filter by mapped subdirectory.",
+    ),
+) -> List[Dict[str, str]]:
+    """List trend models or run folders under .private_data/models.
+
+    ``history_models`` is intentionally excluded from UI-visible results.
+    Directory-based runs are preferred and shown by folder name.
+    """
     models_dir = os.path.join(project_root, ".private_data", "models")
     if not os.path.isdir(models_dir):
         return []
 
-    results: List[Dict[str, str]] = []
-    for fname in os.listdir(models_dir):
-        if not (fname.endswith(".pkl") or fname.endswith(".pt")):
-            continue
-        rel_path = os.path.join(".private_data", "models", fname)
-        results.append(
-            {
-                "key": rel_path,
-                "label": fname,
-            }
+    requested_type = (model_type or "").strip()
+    if requested_type:
+        folder_names = _TREND_MODEL_DIRS.get(requested_type)
+        allowed_exts = _TREND_MODEL_EXTS.get(requested_type)
+        if not folder_names or not allowed_exts:
+            return []
+    else:
+        folder_names = sorted(
+            {name for names in _TREND_MODEL_DIRS.values() for name in names}
         )
+        allowed_exts = (".pkl", ".pt")
+
+    results_by_key: Dict[str, Dict[str, str]] = {}
+
+    for root, dirs, files in os.walk(models_dir):
+        rel_root = os.path.relpath(root, models_dir)
+        parts = rel_root.split(os.sep)
+        if "history_models" in parts:
+            dirs[:] = []
+            continue
+
+        if "training_run.json" not in files:
+            continue
+
+        manifest = _read_training_run_manifest(root)
+        if not manifest:
+            continue
+        if requested_type and not _manifest_matches_model_type(manifest, requested_type):
+            continue
+
+        primary_model = str(manifest.get("primary_model", "")).strip()
+        if not primary_model or not primary_model.endswith(allowed_exts):
+            continue
+
+        rel_path = os.path.relpath(root, project_root)
+        results_by_key[rel_path] = {
+            "key": rel_path,
+            "label": os.path.basename(root),
+        }
+        dirs[:] = []
+
+    for folder_name in folder_names:
+        folder_path = os.path.join(models_dir, folder_name)
+        if not os.path.isdir(folder_path):
+            continue
+
+        for root, _, files in os.walk(folder_path):
+            rel_root = os.path.relpath(root, models_dir)
+            if "history_models" in rel_root.split(os.sep):
+                continue
+            if root != folder_path and "training_run.json" in files:
+                rel_path = os.path.relpath(root, project_root)
+                results_by_key.setdefault(
+                    rel_path,
+                    {
+                        "key": rel_path,
+                        "label": os.path.basename(root),
+                    },
+                )
+                continue
+            for fname in files:
+                if not fname.endswith(allowed_exts):
+                    continue
+                if re.search(r"_fold\d+\.[^.]+$", fname):
+                    continue
+                abs_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(abs_path, project_root)
+                rel_from_models = os.path.relpath(abs_path, models_dir)
+                results_by_key.setdefault(
+                    rel_path,
+                    {
+                        "key": rel_path,
+                        "label": rel_from_models,
+                    },
+                )
+
+    results = list(results_by_key.values())
+    results.sort(key=lambda item: item["label"].lower())
     return results
 
 

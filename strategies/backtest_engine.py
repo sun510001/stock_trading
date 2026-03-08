@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 from typing import Dict, Union, Optional, List, Callable
 from logger import logger
+from utils.csv_utils import load_date_indexed_csv
 
 from strategies.algorithms import RebalanceAlgorithms, RebalanceContext, RebalanceResult
 
@@ -27,14 +28,7 @@ class BacktestEngine:
         """Load price data from the specified CSV file."""
         try:
             logger.info(f"Loading data from {self.data_path}...")
-            df = pd.read_csv(self.data_path, index_col="Date", parse_dates=True)
-            # Drop rows with NaT index (can occur when Yahoo writes a trailing
-            # empty row that parse_dates converts to NaT).
-            df = df[df.index.notna()]
-            # Guarantee a monotonically increasing, duplicate-free DatetimeIndex
-            # so that label-based slicing (.loc[start:end]) always works.
-            df = df[~df.index.duplicated(keep="last")]
-            df.sort_index(inplace=True)
+            df = load_date_indexed_csv(self.data_path)
             self.data = df.astype(float)
             logger.info(f"Data loaded. Shape: {self.data.shape}")
         except Exception as e:
@@ -64,6 +58,7 @@ class BacktestEngine:
         momentum_threshold: float = 0.0,
         use_sharpe_weighting: bool = False,
         min_blend: float = 0.0,
+        fill_residual_with_safe: bool = True,
     ) -> None:
         """Execute the backtest simulation by delegating trade logic to ``rebalance_fn``.
 
@@ -126,6 +121,8 @@ class BacktestEngine:
             use_sharpe_weighting: If True, allocation weights are proportional
                 to Sharpe-proxy (return / vol) instead of raw return.
                 Forwarded to ``RebalanceContext``.
+            fill_residual_with_safe: If True, route unused portfolio weight
+                into the configured safe assets instead of leaving it as cash.
         """
         logger.info(
             f"Preparing simulation for range: {start_date or 'Start'} to {end_date or 'End'}..."
@@ -133,7 +130,8 @@ class BacktestEngine:
         logger.info(
             f"BacktestEngine.run_backtest params | rebalance_fn={getattr(rebalance_fn, '__name__', rebalance_fn)}, "
             f"top_k={top_k}, target_volatility={target_volatility:.2f}, "
-            f"vol_lookback={vol_lookback}, max_leverage={max_leverage:.2f}"
+            f"vol_lookback={vol_lookback}, max_leverage={max_leverage:.2f}, "
+            f"fill_residual_with_safe={fill_residual_with_safe}"
         )
 
         # Default strategy: use equal-weight, matching BacktestConfig.algorithm default.
@@ -330,6 +328,7 @@ class BacktestEngine:
                     momentum_threshold=momentum_threshold,
                     use_sharpe_weighting=use_sharpe_weighting,
                     min_blend=min_blend,
+                    fill_residual_with_safe=fill_residual_with_safe,
                 )
 
                 result: RebalanceResult = rebalance_fn(ctx)
@@ -344,6 +343,11 @@ class BacktestEngine:
                     f"Rebalance | idx={i}, exposure={total_exposure:.2f}, "
                     f"cash_budget={max(0.0, 1.0 - total_exposure):.2f}"
                 )
+                if result.decision_info:
+                    decision_str = ", ".join(
+                        f"{key}={value}" for key, value in result.decision_info.items()
+                    )
+                    logger.info(f"Rebalance | idx={i}, decision: {decision_str}")
 
                 # ── Log algorithm name, selected assets and weights ────────────
                 algo_name = getattr(rebalance_fn, "__name__", str(rebalance_fn))

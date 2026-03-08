@@ -388,7 +388,7 @@ class DataProcessor:
         try:
             portfolio_df = self.build_aligned_dataframe(assets)
             output_file = os.path.join(self.processed_path, output_filename)
-            portfolio_df.to_csv(output_file)
+            portfolio_df.to_csv(output_file, index_label="Date")
             logger.info(f"Aligned assets saved successfully to: {output_file}")
             return output_file
         except Exception as e:
