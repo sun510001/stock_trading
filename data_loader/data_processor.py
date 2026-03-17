@@ -70,6 +70,33 @@ class DataProcessor:
         first_thursday = month_start + pd.Timedelta(days=days_to_first_thu)
         return first_thursday + pd.Timedelta(days=14)
 
+    @staticmethod
+    def _next_or_same_weekday(
+        idx: pd.DatetimeIndex,
+        weekday: int,
+    ) -> pd.DatetimeIndex:
+        """Shift each timestamp forward to the next occurrence of weekday."""
+        offsets = (weekday - idx.weekday) % 7
+        return idx + pd.to_timedelta(offsets, unit="D")
+
+    @staticmethod
+    def _forward_fill_on_reference_calendar(
+        values: pd.Series,
+        reference_index: pd.DatetimeIndex,
+    ) -> pd.Series:
+        """Align a series to the reference calendar without pre-inception fills."""
+        cleaned = values.copy()
+        cleaned.index = pd.to_datetime(cleaned.index)
+        cleaned = cleaned[cleaned.index.notna()]
+        cleaned = cleaned[~cleaned.index.duplicated(keep="last")].sort_index()
+
+        aligned = cleaned.reindex(reference_index).ffill()
+        first_valid = cleaned.first_valid_index()
+        if first_valid is not None:
+            aligned.loc[aligned.index < pd.Timestamp(first_valid)] = np.nan
+        aligned.name = cleaned.name
+        return aligned
+
     def _apply_macro_availability_rules(
         self,
         name: str,
@@ -127,9 +154,9 @@ class DataProcessor:
 
         idx = cleaned.index
         if release_rule == "next_thursday":
-            thursday_weekday = 3
-            offsets = (thursday_weekday - idx.weekday) % 7
-            release_idx = idx + pd.to_timedelta(offsets, unit="D")
+            release_idx = self._next_or_same_weekday(idx, weekday=3)
+        elif release_rule == "next_friday":
+            release_idx = self._next_or_same_weekday(idx, weekday=4)
         elif release_rule == "third_thursday_same_month":
             release_idx = pd.DatetimeIndex([self._third_thursday_of_month(ts) for ts in idx])
         elif release_rule == "calendar_lag":
@@ -225,8 +252,7 @@ class DataProcessor:
         会在回测阶段按本次使用的资产子集进行。"""
         logger.info("Starting Multi-Asset Data Processing & Alignment (in-memory)...")
         prices: Dict[str, pd.Series] = {}
-        # Track low-frequency macro series that need re-alignment to the trading calendar
-        low_freq_macro_names: List[str] = []
+        macro_names: List[str] = []
 
         for asset in assets:
             name = asset["name"]
@@ -234,8 +260,11 @@ class DataProcessor:
             engine = asset.get("engine")
 
             # ── Macro indicators (source=fred / kind=macro) ───────────────────
-            # Loaded from data/macro/, expanded to business-daily via ffill.
+            # Loaded from data/macro/, first expanded to calendar-daily so
+            # weekend release dates are preserved, then re-aligned to the
+            # reference trading calendar below.
             if kind == "macro" or asset.get("source") == "fred":
+                macro_names.append(name)
                 safe_name = sanitize_filename(name)
                 macro_path = os.path.join(self.raw_path, "macro", f"{safe_name}.csv")
                 if not os.path.exists(macro_path):
@@ -254,8 +283,6 @@ class DataProcessor:
                             f"Expanding macro '{name}' ({freq}) to daily via forward-fill..."
                         )
                         prices[name] = _expand_low_frequency_to_daily_with_ffill(raw_series)
-                        # Mark for later re-alignment to the equity trading calendar
-                        low_freq_macro_names.append(name)
                     else:
                         # Already daily (freq=='d') or unknown — use as-is.
                         prices[name] = raw_series
@@ -292,32 +319,24 @@ class DataProcessor:
         if not prices:
             raise ValueError("No assets were successfully processed.")
 
-        # ── Re-align low-frequency macro series to the equity trading calendar ──
-        # Replaces the initial calendar-daily expansion (which includes weekends
-        # and holidays) with a series indexed exactly on the reference asset's
-        # trading days.  Forward-fill carries the last known release value into
-        # every subsequent trading day until the next observation arrives.
-        if low_freq_macro_names:
-            ref_index = self._build_reference_trading_calendar(prices, low_freq_macro_names)
-            if ref_index is not None:
-                for macro_name in low_freq_macro_names:
-                    if macro_name not in prices:
-                        continue
-                    original_len = len(prices[macro_name])
-                    prices[macro_name] = (
-                        prices[macro_name]
-                        .reindex(ref_index)
-                        .ffill()
-                    )
-                    logger.info(
-                        f"Low-freq macro '{macro_name}' re-indexed to trading calendar: "
-                        f"{original_len} calendar days → {len(prices[macro_name])} trading days."
-                    )
-            else:
-                logger.warning(
-                    "No reference trading calendar found; low-frequency macro series "
-                    "retain calendar-daily expansion."
+        ref_index = self._build_reference_trading_calendar(prices, macro_names)
+        if ref_index is not None:
+            aligned_prices: Dict[str, pd.Series] = {}
+            for name, series in prices.items():
+                aligned_prices[name] = self._forward_fill_on_reference_calendar(
+                    series,
+                    ref_index,
                 )
+            prices = aligned_prices
+            logger.info(
+                "All assets aligned to the reference trading calendar with "
+                "post-inception forward-fill for market-closure gaps."
+            )
+        else:
+            logger.warning(
+                "No reference trading calendar found; keeping original asset indices "
+                "without unified gap filling."
+            )
 
         # ── Derived indicator: Net Liquidity ──────────────────────────────────
         # Net Liquidity = WALCL - WTREGEN - RRPONTSYD

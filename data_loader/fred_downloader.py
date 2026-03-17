@@ -98,8 +98,15 @@ MACRO_SERIES: List[Dict[str, Any]] = [
         "frequency": "d",
     },
     {
+        "series_id": "T10YIE",
+        "name": "T10YIE",
+        "description": "10-Year Breakeven Inflation Rate (daily, %)",
+        "start_date": "2003-01-01",
+        "frequency": "d",
+    },
+    {
         "series_id": "T10Y2Y",
-        "name": "TermSpread_10Y2Y",
+        "name": "T10Y2Y",
         "description": "10-Year minus 2-Year Treasury Yield Spread (daily, %)",
         "start_date": "1976-06-01",
         "frequency": "d",
@@ -140,7 +147,7 @@ def _get_fred(api_key: str) -> Any:
 
 
 def _expand_low_frequency_to_daily_with_ffill(values: pd.Series) -> pd.Series:
-    """Expand low-frequency macro series to business-daily values via forward fill.
+    """Expand low-frequency macro series to calendar-daily values via forward fill.
 
     This method is strictly causal at each timestamp and avoids look-ahead bias
     introduced by full-sample smoothing filters.
@@ -149,7 +156,12 @@ def _expand_low_frequency_to_daily_with_ffill(values: pd.Series) -> pd.Series:
         values: Low-frequency time series indexed by observation date.
 
     Returns:
-        Business-daily series filled by last known observation.
+        Calendar-daily series filled by last known observation.
+
+    Notes:
+        This is an intermediate expansion step used to preserve weekend-dated
+        macro release anchors. Final model and backtest datasets are later
+        aligned onto the reference trading calendar in DataProcessor.
     """
     if values.empty:
         return values
