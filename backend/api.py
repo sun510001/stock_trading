@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from glob import glob
 import json
 import os
 import re
@@ -24,13 +25,14 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from backend.service import BacktestConfig, BacktestResult, BacktestService
+from backend.service import BacktestBatchResult, BacktestConfig, BacktestResult, BacktestService
 from backend.assets_config import AssetConfigManager
 from data_loader.yahoo_downloader import YahooIncrementalLoader
 from data_loader.akshare_downloader import AkshareIncrementalLoader
 from data_loader.baostock_downloader import BaostockIncrementalLoader
 from data_loader.data_processor import DataProcessor
 from data_loader.fred_downloader import FREDIncrementalLoader, MACRO_SERIES
+from data_loader.regime_dataset_builder import RegimeDatasetBuilder
 from utils.naming import sanitize_filename
 from utils.csv_utils import load_date_indexed_csv
 from logger import logger
@@ -40,6 +42,7 @@ app = FastAPI(title="Backtest API", version="1.0.0")
 _ALLOWED_RELEASE_RULES = {
     "none",
     "next_thursday",
+    "next_friday",
     "third_thursday_same_month",
     "calendar_lag",
 }
@@ -56,6 +59,13 @@ _TREND_MODEL_DIRS: Dict[str, List[str]] = {
     "torch_mlp": ["search"],
     "window_transformer": ["search"],
     "torch_regression": ["search"],
+    "bottom_signal_overlay": [],
+    "regime_horizon_router": [],
+}
+
+_TREND_MODEL_STATIC_FILES: Dict[str, List[str]] = {
+    "regime_horizon_router": [os.path.join(".private_data", "plan", "regime_horizon_router.json")],
+    "bottom_signal_overlay": [os.path.join(".private_data", "plan", "bottom_signal_overlay_default.json")],
 }
 
 _TREND_MODEL_EXTS: Dict[str, tuple[str, ...]] = {
@@ -64,6 +74,8 @@ _TREND_MODEL_EXTS: Dict[str, tuple[str, ...]] = {
     "torch_mlp": (".pt",),
     "window_transformer": (".pt",),
     "torch_regression": (".pt",),
+    "bottom_signal_overlay": (".json",),
+    "regime_horizon_router": (".json",),
 }
 
 
@@ -87,7 +99,121 @@ def _manifest_matches_model_type(manifest: Dict[str, Any], model_type: str) -> b
         return family in {"torch_mlp", "window_transformer"}
     if model_type == "torch_regression":
         return family == "window_regression"
+    if model_type == "regime_horizon_router":
+        return family == "regime_horizon_router"
     return family == model_type
+
+
+def _list_dynamic_router_json_files() -> List[str]:
+    plan_dir = os.path.join(project_root, ".private_data", "plan")
+    if not os.path.isdir(plan_dir):
+        return []
+
+    rel_paths: List[str] = []
+    for abs_path in sorted(glob(os.path.join(plan_dir, "regime_horizon_router*.json"))):
+        if not os.path.isfile(abs_path):
+            continue
+        rel_paths.append(os.path.relpath(abs_path, project_root))
+    return rel_paths
+
+
+def _list_dynamic_bottom_overlay_json_files() -> List[str]:
+    plan_dir = os.path.join(project_root, ".private_data", "plan")
+    if not os.path.isdir(plan_dir):
+        return []
+
+    rel_paths: List[str] = []
+    for abs_path in sorted(glob(os.path.join(plan_dir, "bottom_signal_overlay*.json"))):
+        if not os.path.isfile(abs_path):
+            continue
+        rel_paths.append(os.path.relpath(abs_path, project_root))
+    return rel_paths
+
+
+def _resolve_project_relative_path(rel_path: str) -> str:
+    abs_path = os.path.normpath(os.path.join(project_root, rel_path))
+    if os.path.commonpath([project_root, abs_path]) != project_root:
+        raise HTTPException(status_code=400, detail="Path escapes project root")
+    return abs_path
+
+
+def _load_json_artifact(rel_path: str) -> Dict[str, Any]:
+    abs_path = _resolve_project_relative_path(rel_path)
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {rel_path}")
+    try:
+        with open(abs_path, "r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON artifact: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Artifact JSON must be an object")
+    return payload
+
+
+def _summarize_trend_model_artifact(model_type: str, model_path: str) -> Dict[str, Any]:
+    allowed_exts = _TREND_MODEL_EXTS.get(model_type)
+    if not allowed_exts or not model_path.endswith(allowed_exts):
+        raise HTTPException(status_code=400, detail="Unsupported model artifact type")
+
+    if not model_path.endswith(".json"):
+        return {
+            "model_type": model_type,
+            "model_path": model_path,
+            "artifact_type": model_type,
+        }
+
+    payload = _load_json_artifact(model_path)
+    summary: Dict[str, Any] = {
+        "model_type": model_type,
+        "model_path": model_path,
+        "artifact_type": payload.get("artifact_type") or payload.get("base_model_type") or model_type,
+    }
+
+    if model_type == "bottom_signal_overlay":
+        summary.update(
+            {
+                "target_asset": payload.get("target_asset"),
+                "breadth_assets": payload.get("breadth_assets") or [],
+                "breadth_asset_count": len(payload.get("breadth_assets") or []),
+                "zscore_window": payload.get("zscore_window"),
+                "ma_window": payload.get("ma_window"),
+                "momentum_window": payload.get("momentum_window"),
+                "breadth_lag": payload.get("breadth_lag"),
+                "router_neutral_min": payload.get("router_neutral_min"),
+                "router_neutral_max": payload.get("router_neutral_max"),
+                "activation_threshold": payload.get("activation_threshold"),
+                "overlay_weight": payload.get("overlay_weight"),
+                "base_model_type": payload.get("base_model_type"),
+                "base_model_path": payload.get("base_model_path"),
+            }
+        )
+        base_model_path = payload.get("base_model_path")
+        if isinstance(base_model_path, str) and base_model_path.endswith(".json"):
+            base_payload = _load_json_artifact(base_model_path)
+            summary["base_summary"] = {
+                "ui_preset": (base_payload.get("ui_preset") or {}).get("name"),
+                "benchmark_interval": (base_payload.get("ui_preset") or {}).get("benchmark_interval") or {},
+                "signal_formula": base_payload.get("signal_formula"),
+                "horizon_weights": base_payload.get("horizon_weights") or {},
+                "ui_threshold": (base_payload.get("ui_preset") or {}).get("model_threshold"),
+            }
+        return summary
+
+    if model_type == "regime_horizon_router":
+        summary.update(
+            {
+                "ui_preset": (payload.get("ui_preset") or {}).get("name"),
+                "benchmark_interval": (payload.get("ui_preset") or {}).get("benchmark_interval") or {},
+                "signal_formula": payload.get("signal_formula"),
+                "horizon_weights": payload.get("horizon_weights") or {},
+                "ui_threshold": (payload.get("ui_preset") or {}).get("model_threshold"),
+                "rolling_oos": payload.get("rolling_oos") or {},
+            }
+        )
+        return summary
+
+    return summary
 
 
 class AssetModels:
@@ -180,7 +306,61 @@ def _is_macro_asset(asset: Dict[str, Any]) -> bool:
     Returns:
         bool: True if the asset is macro/FRED, otherwise False.
     """
-    return asset.get("kind") == "macro" or asset.get("source") == "fred"
+    downloader = str(asset.get("downloader") or "").strip().lower()
+    source = str(asset.get("source") or "").strip().lower()
+    kind = str(asset.get("kind") or "").strip().lower()
+    return kind == "macro" or source == "fred" or downloader == "fred"
+
+
+def _resolve_known_downloader(asset: Dict[str, Any]) -> str:
+    """Resolve the effective canonical downloader for an asset.
+
+    Args:
+        asset: Asset configuration dictionary.
+
+    Returns:
+        Canonical downloader key or an empty string if unresolved.
+    """
+    known_dl = str(asset.get("downloader") or "").strip().lower()
+    if known_dl:
+        return known_dl
+
+    known_source = str(asset.get("source") or "").strip().lower()
+    if known_source == "yahoo":
+        return "yahoo"
+    if known_source.startswith("akshare"):
+        return "akshare"
+    if known_source in {"baostock", "fred"}:
+        return known_source
+    return ""
+
+
+def _can_try_akshare_us_fallback(ticker: str) -> bool:
+    """Return whether a Yahoo ticker is compatible with AkShare's US path.
+
+    AkShare's ``stock_us_daily`` endpoint works for plain US stock/ETF-style
+    symbols. Yahoo-specific index, FX, crypto, and exchange-suffixed symbols
+    should be rejected early to avoid noisy retry loops.
+
+    Args:
+        ticker: Raw asset ticker.
+
+    Returns:
+        True when the ticker looks compatible with AkShare US symbols.
+    """
+    return bool(re.fullmatch(r"[A-Z0-9]{1,10}", str(ticker or "").strip().upper()))
+
+
+def _can_try_baostock_fallback(ticker: str) -> bool:
+    """Return whether a ticker can be mapped to Baostock format.
+
+    Args:
+        ticker: Raw asset ticker.
+
+    Returns:
+        True when Baostock has a supported symbol mapping.
+    """
+    return BaostockIncrementalLoader._to_baostock_ticker(str(ticker or "").strip()) is not None
 
 
 def _normalize_macro_release_fields(asset: Dict[str, Any]) -> Dict[str, Any]:
@@ -276,7 +456,7 @@ def _resolve_asset_csv_path(asset: Dict[str, Any], data_dir: str, macro_dir: str
         Absolute CSV file path for the asset.
     """
     safe_name = sanitize_filename(asset["name"])
-    is_macro = asset.get("kind") == "macro" or asset.get("source") == "fred"
+    is_macro = _is_macro_asset(asset)
     base_dir = macro_dir if is_macro else data_dir
     return os.path.join(base_dir, f"{safe_name}.csv")
 
@@ -528,7 +708,7 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
             success = False
 
             # ── FRED MACRO ASSETS ─────────────────────────────────────────────
-            is_macro = known_source == "fred" or asset.get("kind") == "macro"
+            is_macro = _is_macro_asset(asset)
             if is_macro or forced_dl == "fred":
                 if not is_macro and forced_dl == "fred":
                     # 用户强制选择 FRED 模式，但当前资产不是宏观指标，直接跳过
@@ -593,36 +773,39 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
             # ── AUTO MODE (smart routing with fallbacks) ──────────────────────
             else:
                 # Resolve effective downloader: prefer explicit `downloader` field, fall back to `source`
-                known_dl = (asset.get("downloader") or "").strip().lower()
-                if not known_dl:
-                    if known_source == "yahoo":
-                        known_dl = "yahoo"
-                    elif known_source is not None and known_source.startswith("akshare"):
-                        known_dl = "akshare"
-                    elif known_source == "baostock":
-                        known_dl = "baostock"
+                known_dl = _resolve_known_downloader(asset)
                 logger.info(f"[AUTO] Resolved downloader='{known_dl}' for {name} (source={known_source})")
 
                 if known_dl == "yahoo":
                     logger.info(f"Downloading known Yahoo asset: {name} ({ticker})")
                     success = yahoo_loader.download_symbol(ticker, name, start_fallback)
                     if not success:
-                        logger.warning(f"Yahoo failed for {name}. Attempting Akshare fallback...")
-                        success = akshare_loader.download_symbol(ticker, name, start_fallback)
+                        if _can_try_akshare_us_fallback(ticker):
+                            logger.warning(f"Yahoo failed for {name}. Attempting Akshare fallback...")
+                            success = akshare_loader.download_symbol(ticker, name, start_fallback)
+                        else:
+                            logger.info(
+                                f"Yahoo failed for {name}. Skipping Akshare fallback because ticker {ticker!r} is not AkShare-US compatible."
+                            )
                         if success:
                             asset["source"] = "akshare"
                             asset["downloader"] = "akshare"
                             updated_assets = True
                         else:
-                            logger.info(f"Akshare fallback failed for {name}. Attempting Baostock fallback...")
-                            try:
-                                success = baostock_loader.download_symbol(ticker, name, start_fallback)
-                                if success:
-                                    asset["source"] = "baostock"
-                                    asset["downloader"] = "baostock"
-                                    updated_assets = True
-                            except Exception:
-                                success = False
+                            if _can_try_baostock_fallback(ticker):
+                                logger.info(f"Akshare fallback failed for {name}. Attempting Baostock fallback...")
+                                try:
+                                    success = baostock_loader.download_symbol(ticker, name, start_fallback)
+                                    if success:
+                                        asset["source"] = "baostock"
+                                        asset["downloader"] = "baostock"
+                                        updated_assets = True
+                                except Exception:
+                                    success = False
+                            else:
+                                logger.info(
+                                    f"Akshare fallback failed for {name}. Skipping Baostock fallback because ticker {ticker!r} has no Baostock mapping."
+                                )
 
                 elif known_dl == "akshare":
                     # Handles: "akshare", "akshare_index", "akshare_etf",
@@ -655,6 +838,40 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
                         success = baostock_loader.download_symbol(ticker, name, start_fallback)
                     except Exception as bs_err:
                         logger.warning(f"Baostock failed for {name}: {bs_err}")
+                        success = False
+
+                elif known_dl == "fred":
+                    logger.info(f"[AUTO:FRED] Downloading macro series: {name} ({ticker})")
+                    freq = (
+                        str(asset.get("frequency")).strip().lower()
+                        if asset.get("frequency")
+                        else next(
+                            (s.get("frequency") for s in MACRO_SERIES if s["name"] == name),
+                            None,
+                        )
+                    )
+                    if freq in {"day", "daily"}:
+                        freq = "d"
+                    elif freq in {"month", "monthly"}:
+                        freq = "m"
+                    elif freq in {"quarter", "quarterly"}:
+                        freq = "q"
+                    elif freq in {"year", "yearly", "annual"}:
+                        freq = "a"
+                    elif freq in {"week", "weekly"}:
+                        freq = "w"
+                    elif freq not in {"d", "w", "m", "q", "a", None}:
+                        freq = None
+                    try:
+                        _get_fred_loader().download_series(
+                            series_id=ticker,
+                            name=name,
+                            start_date_fallback=start_fallback,
+                            frequency=freq,
+                        )
+                        success = True
+                    except Exception as fred_err:
+                        logger.warning(f"FRED download failed for {name} ({ticker}): {fred_err}")
                         success = False
 
                 else:
@@ -807,7 +1024,8 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
     说明:
     - 先删除已有的 aligned_assets.csv，再从所有已下载数据重新构建。
     - 忽略 UI 传入的勾选资产列表，始终处理全部配置资产。
-    - 若 US30Y 和 US3M 均存在，自动派生 TermSpread 列。
+    - 输出统一交易日历且仅在资产首个真实观测之后做前向填充。
+    - 额外生成独立的 regime_daily_dataset.csv 供训练与标签审计使用。
     """
     assets = AssetConfigManager.load_assets()
     if not assets:
@@ -828,10 +1046,22 @@ def process_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
             assets,
             output_filename="aligned_assets.csv",
         )
+        regime_path = os.path.join(
+            project_root,
+            "data_processed",
+            "regime_daily_dataset.csv",
+        )
+        RegimeDatasetBuilder().build_from_aligned_csv(full_path, regime_path)
 
         return {
-            "detail": "Alignment complete.",
+            "detail": "Alignment complete. Canonical regime dataset refreshed in data_processed.",
             "aligned_filename": os.path.basename(full_path),
+            "aligned_output_path": os.path.relpath(full_path, project_root),
+            "regime_filename": os.path.basename(regime_path),
+            "regime_output_path": os.path.relpath(regime_path, project_root),
+            "regime_dataset_role": "canonical_base_dataset",
+            "plan_artifacts_dir": os.path.join(".private_data", "plan"),
+            "plan_artifacts_note": "Audit and derived regime artifacts are generated separately under .private_data/plan.",
         }
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -846,10 +1076,11 @@ def list_trend_models(
         description="Optional trend model type used to filter by mapped subdirectory.",
     ),
 ) -> List[Dict[str, str]]:
-    """List trend models or run folders under .private_data/models.
+    """List trend model artifacts available to the UI.
 
     ``history_models`` is intentionally excluded from UI-visible results.
-    Directory-based runs are preferred and shown by folder name.
+    Directory-based runs are preferred and shown by folder name, while
+    non-training artifacts can be exposed from static plan paths.
     """
     models_dir = os.path.join(project_root, ".private_data", "models")
     if not os.path.isdir(models_dir):
@@ -857,17 +1088,41 @@ def list_trend_models(
 
     requested_type = (model_type or "").strip()
     if requested_type:
-        folder_names = _TREND_MODEL_DIRS.get(requested_type)
+        folder_names = _TREND_MODEL_DIRS.get(requested_type, [])
+        static_files = _TREND_MODEL_STATIC_FILES.get(requested_type, [])
+        if requested_type == "regime_horizon_router":
+            static_files = sorted(set([*static_files, *_list_dynamic_router_json_files()]))
+        if requested_type == "bottom_signal_overlay":
+            static_files = sorted(set([*static_files, *_list_dynamic_bottom_overlay_json_files()]))
         allowed_exts = _TREND_MODEL_EXTS.get(requested_type)
-        if not folder_names or not allowed_exts:
+        if (not folder_names and not static_files) or not allowed_exts:
             return []
     else:
         folder_names = sorted(
             {name for names in _TREND_MODEL_DIRS.values() for name in names}
         )
-        allowed_exts = (".pkl", ".pt")
+        static_files = [
+            path
+            for paths in _TREND_MODEL_STATIC_FILES.values()
+            for path in paths
+        ]
+        static_files.extend(_list_dynamic_router_json_files())
+        static_files.extend(_list_dynamic_bottom_overlay_json_files())
+        allowed_exts = (".pkl", ".pt", ".json")
 
     results_by_key: Dict[str, Dict[str, str]] = {}
+
+    for rel_path in static_files:
+        abs_path = os.path.join(project_root, rel_path)
+        if not os.path.isfile(abs_path) or not abs_path.endswith(allowed_exts):
+            continue
+        results_by_key.setdefault(
+            rel_path,
+            {
+                "key": rel_path,
+                "label": os.path.basename(rel_path),
+            },
+        )
 
     for root, dirs, files in os.walk(models_dir):
         rel_root = os.path.relpath(root, models_dir)
@@ -936,10 +1191,42 @@ def list_trend_models(
     return results
 
 
-@app.post("/api/backtest", response_model=BacktestResult)
-def backtest_endpoint(req: BacktestConfig) -> BacktestResult:
+@app.get("/api/trend_model_artifact")
+def get_trend_model_artifact(
+    model_type: str = Query(..., description="Trend model type"),
+    model_path: str = Query(..., description="Project-relative path to artifact"),
+) -> Dict[str, Any]:
+    return _summarize_trend_model_artifact(
+        model_type=model_type.strip(),
+        model_path=model_path.strip(),
+    )
+
+
+@app.post("/api/backtest", response_model=BacktestBatchResult)
+def backtest_endpoint(req: BacktestConfig) -> BacktestBatchResult:
     try:
-        return manager.service.run_job(req)
+        selected_algorithms = [str(req.algorithm).strip()]
+        if req.strategy_selector_enabled:
+            requested = [
+                str(name).strip()
+                for name in (req.selected_algorithms or [])
+                if str(name).strip()
+            ]
+            if not requested:
+                raise HTTPException(status_code=400, detail="At least one strategy must be selected")
+            selected_algorithms = requested
+
+        results: List[BacktestResult] = []
+        for algorithm in selected_algorithms:
+            run_cfg = req.model_copy(update={"algorithm": algorithm})
+            results.append(manager.service.run_job(run_cfg))
+
+        return BacktestBatchResult(
+            results=results,
+            selected_algorithms=selected_algorithms,
+        )
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -984,13 +1271,26 @@ def save_best_config(req: BacktestConfig) -> Dict[str, str]:
     os.makedirs(configs_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    algo_short = req.algorithm.replace("_rebalance", "")
+    selected_algorithms = [
+        str(name).strip()
+        for name in (req.selected_algorithms or [])
+        if str(name).strip()
+    ]
+    if req.strategy_selector_enabled and len(selected_algorithms) > 1:
+        algo_short = "multi_strategy"
+    else:
+        algo_key = selected_algorithms[0] if selected_algorithms else req.algorithm
+        algo_short = algo_key.replace("_rebalance", "")
     model_info = f"_{req.trend_model_type}" if req.use_trend_model else ""
     yaml_filename = f"config_{timestamp}_{algo_short}{model_info}.yaml"
     yaml_path = os.path.join(configs_dir, yaml_filename)
 
     try:
-        cfg_dict = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        cfg_dict = (
+            req.model_dump(by_alias=True)
+            if hasattr(req, "model_dump")
+            else req.dict(by_alias=True)
+        )
         with open(yaml_path, "w", encoding="utf-8") as f:
             yaml.dump(cfg_dict, f, allow_unicode=True, sort_keys=False)
         return {"detail": "Config saved successfully", "filename": yaml_filename}

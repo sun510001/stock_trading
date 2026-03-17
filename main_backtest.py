@@ -57,7 +57,7 @@ class BacktestRunner:
             model_lookback_days: Lookback window fed to the trend model.
             model_threshold: Trend score threshold for risk-off switching.
             model_type: Trend model flavour identifier string.
-            model_path: Path to the persisted model file.
+            model_path: Path to the persisted model artifact file.
             top_k: Maximum assets to hold simultaneously.
             target_volatility: Target annualised portfolio volatility.
             vol_lookback: Lookback window for momentum / covariance estimation.

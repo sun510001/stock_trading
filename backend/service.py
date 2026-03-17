@@ -2,7 +2,7 @@ import os
 import sys
 import inspect
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 # Ensure project root is in path so we can import strategies
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +16,8 @@ from utils.naming import sanitize_filename
 
 class BacktestConfig(BaseModel):
     """Configuration model for backtest execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     data_file: str = Field(
         default="data_processed/aligned_assets.csv",
@@ -41,6 +43,14 @@ class BacktestConfig(BaseModel):
         default="permanent_portfolio_rebalance",
         description="Algorithm function name ending with '_rebalance'",
     )
+    strategy_selector_enabled: bool = Field(
+        default=False,
+        description="Whether the UI multi-strategy selector mode is enabled.",
+    )
+    selected_algorithms: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of algorithm keys selected in UI multi-strategy mode.",
+    )
     candidate_assets: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -48,9 +58,17 @@ class BacktestConfig(BaseModel):
             "if None, all columns in the data file will be used"
         ),
     )
+    regime_candidate_assets: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Optional mapping from macro regime name to candidate asset lists used by regime-aware position sizing.",
+    )
     safe_assets: Optional[List[str]] = Field(
         default=["20Y_Treasury_ETF", "GoldIndex", "US3M"],
         description="Optional list of assets to shift to when risk-off (if None, shift to Cash)",
+    )
+    regime_safe_assets: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Optional mapping from macro regime name to safe-asset lists used by regime-aware position sizing.",
     )
     top_k: int = Field(
         default=3,
@@ -92,6 +110,18 @@ class BacktestConfig(BaseModel):
         default=True,
         description="If True, route unused portfolio weight into the configured safe assets instead of leaving it as cash.",
     )
+    strategy_b_base_nasdaq100_weight: float = Field(
+        default=0.80,
+        description="Base Nasdaq100 weight used by Strategy B before drawdown scale-in.",
+    )
+    strategy_b_base_us3m_weight: float = Field(
+        default=0.20,
+        description="Base US3M weight used by Strategy B before drawdown scale-in.",
+    )
+    use_regime_position_sizing: bool = Field(
+        default=False,
+        description="If True, allow compatible trend models to adjust blend and volatility targets by macro regime state.",
+    )
     use_trend_model: bool = Field(
         default=False,
         description="Whether to enable the unsupervised trend model to gate rebalancing",
@@ -100,7 +130,8 @@ class BacktestConfig(BaseModel):
         default="kmeans_simple",
         description=(
             "Trend model type: 'kmeans_simple', 'kmeans_window', 'random_forest', "
-            "'torch_mlp', 'window_transformer', or 'torch_regression'"
+            "'torch_mlp', 'window_transformer', 'torch_regression', "
+            "'regime_horizon_router', or 'bottom_signal_overlay'"
         ),
     )
     model_path: Optional[str] = Field(
@@ -109,7 +140,12 @@ class BacktestConfig(BaseModel):
     )
     model_lookback_days: int = Field(
         default=60,
-        description="Number of past days used as the fixed window for the trend model",
+        alias="model_lookback_trading_days",
+        validation_alias=AliasChoices(
+            "model_lookback_trading_days",
+            "model_lookback_days",
+        ),
+        description="Number of past trading days used as the fixed window for the trend model",
     )
     model_threshold: float = Field(
         default=0.5,
@@ -124,6 +160,15 @@ class BacktestResult(BaseModel):
     result_html_path: str
     result_url: str
     algorithm: str
+    future_regime_forecast: Optional[Dict[str, Any]] = None
+    strategy_diagnostics: Optional[Dict[str, Any]] = None
+
+
+class BacktestBatchResult(BaseModel):
+    """Response model for one-or-more backtest runs from a single request."""
+
+    results: List[BacktestResult]
+    selected_algorithms: List[str]
 
 
 class BacktestService:
@@ -203,6 +248,7 @@ class BacktestService:
             rebalance_fn=rebalance_fn,
             rebalance_interval_days=cfg.rebalance_interval_days,
             candidate_assets=actual_candidate_assets,
+            regime_candidate_assets=cfg.regime_candidate_assets,
             use_trend_model=cfg.use_trend_model,
             model_lookback_days=cfg.model_lookback_days,
             model_threshold=cfg.model_threshold,
@@ -213,12 +259,16 @@ class BacktestService:
             vol_lookback=cfg.vol_lookback,
             max_leverage=cfg.max_leverage,
             safe_assets=cfg.safe_assets,
+            regime_safe_assets=cfg.regime_safe_assets,
             max_asset_weight=cfg.max_asset_weight,
             vol_scale_lookback=cfg.vol_scale_lookback,
             momentum_threshold=cfg.momentum_threshold,
             use_sharpe_weighting=cfg.use_sharpe_weighting,
             min_blend=cfg.min_blend,
             fill_residual_with_safe=cfg.fill_residual_with_safe,
+            use_regime_position_sizing=cfg.use_regime_position_sizing,
+            strategy_b_base_nasdaq100_weight=cfg.strategy_b_base_nasdaq100_weight,
+            strategy_b_base_us3m_weight=cfg.strategy_b_base_us3m_weight,
         )
 
         stats = strategy.get_performance_stats(
@@ -227,9 +277,11 @@ class BacktestService:
         if not stats:
             raise RuntimeError("Backtest simulation produced no statistics.")
 
+        algorithm_slug = sanitize_filename(cfg.algorithm.replace("_rebalance", ""))
         html_path = strategy.plot_results(
             output_dir=output_dir_abs,
             benchmark_cols=cfg.benchmark_cols,
+            output_filename=f"backtest_results_{algorithm_slug}.html",
         )
         if not html_path:
             raise RuntimeError("Failed to generate performance chart.")
@@ -242,4 +294,6 @@ class BacktestService:
             result_html_path=rel_html_path,
             result_url=result_url,
             algorithm=cfg.algorithm,
+            future_regime_forecast=strategy.future_regime_forecast,
+            strategy_diagnostics=strategy.strategy_diagnostics,
         )

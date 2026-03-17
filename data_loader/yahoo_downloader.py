@@ -11,6 +11,13 @@ from logger import logger
 from utils.decorators import ExecutionDecorators
 from utils.naming import sanitize_filename
 
+
+_YAHOO_TICKER_ALIASES: Dict[str, List[str]] = {
+    # ICE US Dollar Index on Yahoo intermittently fails via DX-Y.NYB.
+    # Use the dollar index futures ticker as an incremental fallback.
+    "DX-Y.NYB": ["DX=F"],
+}
+
 class YahooIncrementalLoader:
     """
     [Data ETL Class]
@@ -30,6 +37,20 @@ class YahooIncrementalLoader:
         self.storage_path: str = storage_path
         if not os.path.exists(self.storage_path):
             os.makedirs(self.storage_path)
+
+    @staticmethod
+    def _candidate_tickers(ticker: str) -> List[str]:
+        """Return the ordered list of Yahoo tickers to try for an asset.
+
+        Args:
+            ticker: Primary configured Yahoo ticker.
+
+        Returns:
+            Ordered candidate tickers with aliases appended.
+        """
+        candidates = [ticker]
+        candidates.extend(_YAHOO_TICKER_ALIASES.get(ticker, []))
+        return candidates
 
     def _get_existing_data(self, file_path: str) -> pd.DataFrame:
         """
@@ -99,22 +120,39 @@ class YahooIncrementalLoader:
 
         logger.info(f"[{name}] Downloading {ticker} from {start_download_date}...")
 
-        try:
-            # auto_adjust=True returns adjusted OHLCV
-            df_new = yf.download(ticker, start=start_download_date, progress=False, auto_adjust=True)
-        except Exception as e:
-            logger.error(f"[{name}] Download failed: {e}")
-            return False
+        df_new = pd.DataFrame()
+        resolved_ticker = ticker
+        for candidate in self._candidate_tickers(ticker):
+            resolved_ticker = candidate
+            try:
+                # auto_adjust=True returns adjusted OHLCV
+                df_new = yf.download(
+                    candidate,
+                    start=start_download_date,
+                    progress=False,
+                    auto_adjust=True,
+                )
+            except Exception as e:
+                logger.warning(f"[{name}] Yahoo download failed for {candidate}: {e}")
+                continue
+
+            if not df_new.empty:
+                if candidate != ticker:
+                    logger.info(f"[{name}] Yahoo alias fallback succeeded: {ticker} -> {candidate}")
+                break
+
+            logger.warning(
+                f"YahooFinance returned empty frame for {candidate} from {start_download_date} or dropped due to intraday."
+            )
 
         if df_new.empty:
-            logger.warning(f"YahooFinance returned empty frame for {ticker} from {start_download_date} or dropped due to intraday.")
             return False
 
         # Handle MultiIndex column structures from yfinance
         if isinstance(df_new.columns, pd.MultiIndex):
             try:
-                if ticker in df_new.columns.get_level_values(1):
-                    df_new = df_new.xs(ticker, axis=1, level=1)
+                if resolved_ticker in df_new.columns.get_level_values(1):
+                    df_new = df_new.xs(resolved_ticker, axis=1, level=1)
                 elif 'Close' in df_new.columns.get_level_values(0):
                     df_new.columns = df_new.columns.get_level_values(0)
             except Exception as e:
@@ -139,7 +177,9 @@ class YahooIncrementalLoader:
         # Drop any rows where the Date index is NaT (yfinance trailing empty rows)
         df_new = df_new[df_new.index.notna()]
 
-        logger.info(f"Appending {len(df_new)} rows using Yahoo source from {start_download_date} for {ticker}")
+        logger.info(
+            f"Appending {len(df_new)} rows using Yahoo source from {start_download_date} for {resolved_ticker}"
+        )
 
         if not df_old.empty:
             # Download succeeded: now safe to drop the old last row (potentially
@@ -156,7 +196,7 @@ class YahooIncrementalLoader:
 
         df_final.index.name = 'Date'
         df_final.to_csv(file_path, index=True)
-        logger.info(f"Updated {ticker} to {file_path}")
+        logger.info(f"Updated {resolved_ticker} to {file_path}")
         return True
 
     def probe_earliest_date(self, ticker: str) -> Optional[datetime]:
