@@ -2,7 +2,7 @@ import os
 import sys
 import inspect
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 # Ensure project root is in path so we can import strategies
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,8 +13,11 @@ from strategies.backtest_engine import BacktestEngine
 from strategies.algorithms import RebalanceAlgorithms
 from utils.naming import sanitize_filename
 
+
 class BacktestConfig(BaseModel):
     """Configuration model for backtest execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     data_file: str = Field(
         default="data_processed/aligned_assets.csv",
@@ -28,37 +31,125 @@ class BacktestConfig(BaseModel):
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
     initial_capital: float = Field(100_000.0, description="Initial portfolio capital")
     fees: float = Field(0.0005, description="Transaction fee rate")
-    rebalance_freq: str = Field("QE", description="Calendar frequency (e.g., QE, YE)")
     benchmark_cols: List[str] = Field(
-        default_factory=lambda: ["Nasdaq100", "GoldIndex", "US30Y", "US3M"],
+        default_factory=lambda: ["Nasdaq100", "GoldIndex", "20Y_Treasury_ETF", "US3M"],
         description="Benchmark columns for comparison",
     )
-    rebalance_interval_days: Optional[int] = Field(
-        None,
-        description="Fixed interval in days for rebalancing",
+    rebalance_interval_days: int = Field(
+        30,
+        description="Minimum calendar days between executed rebalances",
     )
     algorithm: str = Field(
         default="permanent_portfolio_rebalance",
         description="Algorithm function name ending with '_rebalance'",
     )
-    asset_cols: Optional[List[str]] = Field(
+    strategy_selector_enabled: bool = Field(
+        default=False,
+        description="Whether the UI multi-strategy selector mode is enabled.",
+    )
+    selected_algorithms: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of algorithm keys selected in UI multi-strategy mode.",
+    )
+    candidate_assets: Optional[List[str]] = Field(
         default=None,
         description=(
-            "Optional list of columns to use as strategy assets; "
-            "if None, all columns in the data file will be used"
+            "Optional list of columns to use as candidate assets; "
+            "if provided, the backtest starts from the first date where the selected tradeable assets all have real prices"
         ),
+    )
+    candidate_asset_weights: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Optional manual weight map for candidate assets used by permanent_portfolio_rebalance. Values are normalized at runtime and do not require vol_lookback warmup.",
+    )
+    regime_candidate_assets: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Optional mapping from macro regime name to candidate asset lists used by regime-aware position sizing.",
+    )
+    safe_assets: Optional[List[str]] = Field(
+        default=["20Y_Treasury_ETF", "GoldIndex", "US3M"],
+        description="Optional list of assets to shift to when risk-off (if None, shift to Cash)",
+    )
+    regime_safe_assets: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Optional mapping from macro regime name to safe-asset lists used by regime-aware position sizing.",
+    )
+    top_k: int = Field(
+        default=3,
+        description="Number of top candidate assets to select based on trend score",
+    )
+    target_volatility: float = Field(
+        default=0.10,
+        description="Target annualized portfolio volatility (e.g., 0.10 for 10%)",
+    )
+    vol_lookback: int = Field(
+        default=60,
+        description="Number of past trading days to compute inverse volatility and portfolio volatility for lookback-based strategies",
+    )
+    max_leverage: float = Field(
+        default=1.0,
+        description="Maximum leverage ratio (1.0 means no leverage)",
+    )
+    max_asset_weight: float = Field(
+        default=1.0,
+        description="Hard cap on the weight of any single asset (e.g. 0.30 = 30%). Excess is redistributed among other selected assets.",
+    )
+    vol_scale_lookback: int = Field(
+        default=0,
+        description="Short trailing window (days) used exclusively for vol estimation in the scaling layer. 0 = use full vol_lookback window.",
+    )
+    momentum_threshold: float = Field(
+        default=0.0,
+        description="Minimum cumulative return for an asset to pass the absolute-momentum filter. 0.0 = original hard-zero.",
+    )
+    use_sharpe_weighting: bool = Field(
+        default=False,
+        description="If True, allocation weights are proportional to Sharpe-proxy (return / vol) instead of raw cumulative return.",
+    )
+    min_blend: float = Field(
+        default=0.0,
+        description="Minimum momentum blend ratio [0,1]. Even at the lowest trend score the portfolio holds at least this fraction of momentum weights. Guards against out-of-sample model false-negatives. 0.0 = unconstrained soft-gate.",
+    )
+    fill_residual_with_safe: bool = Field(
+        default=True,
+        description="If True, route unused portfolio weight into the configured safe assets instead of leaving it as cash.",
+    )
+    strategy_b_base_nasdaq100_weight: float = Field(
+        default=0.80,
+        description="Base Nasdaq100 weight used by Strategy B before drawdown scale-in.",
+    )
+    strategy_b_base_us3m_weight: float = Field(
+        default=0.20,
+        description="Base US3M weight used by Strategy B before drawdown scale-in.",
+    )
+    use_regime_position_sizing: bool = Field(
+        default=False,
+        description="If True, allow compatible trend models to adjust blend and volatility targets by macro regime state.",
     )
     use_trend_model: bool = Field(
         default=False,
         description="Whether to enable the unsupervised trend model to gate rebalancing",
     )
-    model_type: str = Field(
-        default="kmeans",
-        description="Trend model type: 'kmeans', 'autoencoder', or 'hmm'",
+    trend_model_type: str = Field(
+        default="kmeans_simple",
+        description=(
+            "Trend model type: 'kmeans_simple', 'kmeans_window', 'random_forest', "
+            "'torch_mlp', 'window_transformer', 'torch_regression', "
+            "'regime_horizon_router', or 'bottom_signal_overlay'"
+        ),
+    )
+    model_path: Optional[str] = Field(
+        default=None,
+        description="Relative path to a persisted trend model file or run folder under project root",
     )
     model_lookback_days: int = Field(
         default=60,
-        description="Number of past days used as the fixed window for the trend model",
+        alias="model_lookback_trading_days",
+        validation_alias=AliasChoices(
+            "model_lookback_trading_days",
+            "model_lookback_days",
+        ),
+        description="Number of past trading days used as the fixed window for the trend model",
     )
     model_threshold: float = Field(
         default=0.5,
@@ -73,6 +164,15 @@ class BacktestResult(BaseModel):
     result_html_path: str
     result_url: str
     algorithm: str
+    future_regime_forecast: Optional[Dict[str, Any]] = None
+    strategy_diagnostics: Optional[Dict[str, Any]] = None
+
+
+class BacktestBatchResult(BaseModel):
+    """Response model for one-or-more backtest runs from a single request."""
+
+    results: List[BacktestResult]
+    selected_algorithms: List[str]
 
 
 class BacktestService:
@@ -100,15 +200,15 @@ class BacktestService:
         """Resolve a relative path against the project root."""
         return os.path.join(project_root, path)
 
-    def _build_aligned_filename_from_asset_cols(self, asset_cols: Optional[List[str]]) -> str:
-        """Build aligned CSV filename based on strategy asset universe.
+    def _build_aligned_filename_from_candidate_assets(self, candidate_assets: Optional[List[str]]) -> str:
+        """Build aligned CSV filename based on candidate asset universe.
 
-        If asset_cols is None or empty, fall back to the default global file.
+        If candidate_assets is None or empty, fall back to the default global file.
         """
-        if not asset_cols:
+        if not candidate_assets:
             return "data_processed/aligned_assets.csv"
 
-        names_sorted = sorted(asset_cols)
+        names_sorted = sorted(candidate_assets)
         key = "_".join(names_sorted)
         safe_key = sanitize_filename(key)
         return os.path.join("data_processed", f"aligned_{safe_key}.csv")
@@ -125,7 +225,7 @@ class BacktestService:
             data_file_abs = global_abs
         else:
             # 2) 如果找不到全局文件，则退回到按资产集合推导专属对齐文件的旧逻辑
-            data_file_rel = self._build_aligned_filename_from_asset_cols(cfg.asset_cols)
+            data_file_rel = self._build_aligned_filename_from_candidate_assets(cfg.candidate_assets)
             data_file_abs = self._resolve_path(data_file_rel)
 
         if not os.path.exists(data_file_abs):
@@ -141,28 +241,52 @@ class BacktestService:
 
         rebalance_fn = algo_info["fn"]
 
+        # Always work on a *copy* so we never mutate the caller's cfg object.
+        actual_candidate_assets = list(cfg.candidate_assets) if cfg.candidate_assets is not None else None
+
         strategy = BacktestEngine(data_file_abs, cfg.initial_capital)
         strategy.run_backtest(
             start_date=cfg.start_date,
             end_date=cfg.end_date,
-            rebalance_freq=cfg.rebalance_freq,
             fees=cfg.fees,
             rebalance_fn=rebalance_fn,
             rebalance_interval_days=cfg.rebalance_interval_days,
-            asset_cols=cfg.asset_cols,
+            candidate_assets=actual_candidate_assets,
+            candidate_asset_weights=cfg.candidate_asset_weights,
+            regime_candidate_assets=cfg.regime_candidate_assets,
             use_trend_model=cfg.use_trend_model,
             model_lookback_days=cfg.model_lookback_days,
             model_threshold=cfg.model_threshold,
-            model_type=cfg.model_type,
+            model_type=cfg.trend_model_type,
+            model_path=cfg.model_path,
+            top_k=cfg.top_k,
+            target_volatility=cfg.target_volatility,
+            vol_lookback=cfg.vol_lookback,
+            max_leverage=cfg.max_leverage,
+            safe_assets=cfg.safe_assets,
+            regime_safe_assets=cfg.regime_safe_assets,
+            max_asset_weight=cfg.max_asset_weight,
+            vol_scale_lookback=cfg.vol_scale_lookback,
+            momentum_threshold=cfg.momentum_threshold,
+            use_sharpe_weighting=cfg.use_sharpe_weighting,
+            min_blend=cfg.min_blend,
+            fill_residual_with_safe=cfg.fill_residual_with_safe,
+            use_regime_position_sizing=cfg.use_regime_position_sizing,
+            strategy_b_base_nasdaq100_weight=cfg.strategy_b_base_nasdaq100_weight,
+            strategy_b_base_us3m_weight=cfg.strategy_b_base_us3m_weight,
         )
 
-        stats = strategy.get_performance_stats()
+        stats = strategy.get_performance_stats(
+            benchmark_col=cfg.benchmark_cols[0] if cfg.benchmark_cols else "SP500"
+        )
         if not stats:
             raise RuntimeError("Backtest simulation produced no statistics.")
 
+        algorithm_slug = sanitize_filename(cfg.algorithm.replace("_rebalance", ""))
         html_path = strategy.plot_results(
             output_dir=output_dir_abs,
             benchmark_cols=cfg.benchmark_cols,
+            output_filename=f"backtest_results_{algorithm_slug}.html",
         )
         if not html_path:
             raise RuntimeError("Failed to generate performance chart.")
@@ -175,4 +299,6 @@ class BacktestService:
             result_html_path=rel_html_path,
             result_url=result_url,
             algorithm=cfg.algorithm,
+            future_regime_forecast=strategy.future_regime_forecast,
+            strategy_diagnostics=strategy.strategy_diagnostics,
         )

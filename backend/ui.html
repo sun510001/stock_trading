@@ -9,13 +9,80 @@
     body { background:#111; color:#eee; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin:0; padding:20px; }
     .panel { background:#1e1e1e; border:1px solid #333; border-radius:8px; padding:16px; margin-bottom:16px; }
     label { display:block; font-size:12px; color:#aaa; margin-bottom:4px; }
-    input, select { width:100%; padding:6px 8px; border-radius:4px; border:1px solid #444; background:#222; color:#eee; box-sizing:border-box; }
+    input, select, textarea { width:100%; padding:6px 8px; border-radius:4px; border:1px solid #444; background:#222; color:#eee; box-sizing:border-box; }
     button { padding:8px 12px; border:none; border-radius:4px; background:#0af; color:#111; font-weight:bold; cursor:pointer; }
     button:disabled { opacity:0.6; cursor:not-allowed; }
     .grid-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; }
-    .stat-card { background:#181818; border:1px solid #333; border-radius:6px; padding:8px; }
-    .stat-label { font-size:12px; color:#888; }
-    .stat-value { font-size:18px; font-weight:bold; }
+    .stat-card { background:#181818; border:1px solid #333; border-radius:6px; padding:8px; position:relative; }
+    .stat-label { font-size:12px; color:#888; border-bottom: 1px dotted #888; cursor: help; display: inline-block; }
+    .stat-value { font-size:18px; font-weight:bold; margin-top:4px; }
+    .stat-card:hover .tooltip { opacity: 1; visibility: visible; }
+    .tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: #333;
+      color: #fff;
+      text-align: left;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      white-space: normal;
+      width: max-content;
+      max-width: 220px;
+      line-height: 1.4;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.2s;
+      z-index: 100;
+      margin-bottom: 5px;
+      pointer-events: none;
+    }
+    .tooltip::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #333 transparent transparent transparent;
+    }
+    .table-tooltip-container { position: relative; display: inline-block; cursor: help; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: #888; }
+    .table-tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      transform: none;
+      background-color: #333;
+      color: #fff;
+      text-align: left;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      white-space: pre-wrap;
+      width: max-content;
+      max-width: 250px;
+      line-height: 1.4;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.05s ease-in-out;
+      z-index: 999;
+      margin-bottom: 6px;
+      pointer-events: none;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    .table-tooltip::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 10px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #333 transparent transparent transparent;
+    }
+    .table-tooltip-container:hover .table-tooltip { opacity: 1; visibility: visible; }
     .error { background:#611; border:1px solid #a33; border-radius:6px; padding:8px; margin-top:8px; display:none; }
     iframe { width:100%; height:1000px; border:none; border-radius:6px; background:#000; }
     
@@ -23,12 +90,16 @@
     .top-layout { display:flex; flex-direction:column; gap:16px; }
     .bottom-layout { display:flex; flex-direction:column; gap:16px; }
     @media (min-width: 1024px) {
-      .top-layout { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; align-items:stretch; }
+      .top-layout { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; align-items:start; }
     }
-    .top-layout .panel { height:100%; display: flex; flex-direction: column; }
+    .top-layout .panel { display: flex; flex-direction: column; }
     table { width:100%; border-collapse:collapse; margin-top:8px; font-size:12px; }
     th, td { border:1px solid #333; padding:4px 6px; text-align:left; }
     th { background:#222; position: sticky; top: 0; z-index: 10; }
+    th[data-sort-key] { cursor:pointer; user-select:none; white-space:nowrap; }
+    th[data-sort-key]:hover { background:#2a2a2a; }
+    th[data-sort-key] .sort-indicator { margin-left:4px; font-size:10px; color:#666; }
+    th[data-sort-key].sort-active .sort-indicator { color:#0af; }
 
     /* Toggle switch for trend model */
     .toggle-wrapper { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; }
@@ -66,6 +137,36 @@
     .asset-chip:active { cursor: grabbing; }
     .asset-chip .remove-btn { cursor: pointer; font-weight: bold; color: #ff4444; margin-left: 4px; }
     .asset-chip.in-use { opacity: 0.4; cursor: default; }
+    .summary-card { background:#171717; border:1px solid #2f2f2f; border-radius:6px; padding:10px 12px; }
+    .summary-title { font-size:11px; color:#7dd3fc; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:6px; }
+    .summary-line { font-size:12px; color:#ddd; line-height:1.45; }
+    .summary-muted { color:#9ca3af; }
+    .summary-warn { color:#fca5a5; }
+    .forecast-badge { display:inline-flex; align-items:center; padding:4px 10px; border-radius:9999px; font-size:12px; font-weight:700; letter-spacing:0.03em; text-transform:uppercase; }
+    .forecast-badge.prosperity { background:#0f3d2e; color:#6ee7b7; }
+    .forecast-badge.inflation { background:#4a2c0b; color:#fbbf24; }
+    .forecast-badge.deflation { background:#1e3a8a; color:#93c5fd; }
+    .forecast-badge.recession { background:#4c0519; color:#fda4af; }
+    .forecast-badge.sideways { background:#374151; color:#d1d5db; }
+    .source-badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:9999px; font-size:11px; font-weight:700; letter-spacing:0.03em; text-transform:uppercase; }
+    .source-badge.historical-router-table { background:#1f2937; color:#cbd5e1; }
+    .source-badge.online-current-fallback { background:#172554; color:#bfdbfe; }
+    .source-badge.default { background:#3f3f46; color:#d4d4d8; }
+    .forecast-prob-row { display:flex; align-items:center; gap:10px; margin-top:8px; }
+    .forecast-prob-label { width:88px; font-size:12px; color:#d1d5db; text-transform:capitalize; }
+    .forecast-prob-track { flex:1; height:8px; border-radius:9999px; background:#262626; overflow:hidden; }
+    .forecast-prob-fill { height:100%; border-radius:9999px; }
+    .forecast-prob-value { width:52px; text-align:right; font-size:12px; color:#9ca3af; }
+    .strategy-option { display:block; padding:12px 14px; border:1px solid #3a3a3a; border-radius:8px; background:#181818; cursor:pointer; transition:border-color 0.2s, background-color 0.2s; }
+    .strategy-option.active { border-color:#2563eb; background:#111c34; }
+    .strategy-option.disabled { opacity:0.45; cursor:not-allowed; }
+    .strategy-option-title { font-size:13px; font-weight:700; color:#f3f4f6; }
+    .strategy-option-desc { font-size:11px; color:#9ca3af; line-height:1.45; margin-top:2px; }
+    .result-tabs { display:flex; flex-wrap:wrap; gap:8px; }
+    .result-tab { padding:8px 12px; border:1px solid #374151; border-radius:9999px; background:#181818; color:#d1d5db; font-size:12px; font-weight:700; cursor:pointer; transition:border-color 0.2s, background-color 0.2s, color 0.2s; }
+    .result-tab.active { border-color:#2563eb; background:#172554; color:#eff6ff; }
+    .weight-row { display:grid; grid-template-columns:minmax(0,1fr) 110px; gap:8px; align-items:center; }
+    .weight-label { font-size:12px; color:#d1d5db; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   </style>
 </head>
 <body>
@@ -76,31 +177,95 @@
     <div class='main-layout'>
       <div class='top-layout'>
         <!-- LEFT: Configuration Panel -->
-        <div class='panel self-start'>
-          <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Configuration</h2>
+        <div id='config-panel' class='panel self-start'>
+          <div class="flex items-center justify-between mb-4 border-b border-gray-700 pb-2">
+            <h2 class="text-lg font-bold">Configuration</h2>
+          </div>
+          
+          <!-- Saved Config Loader -->
+          <div class="mb-4 bg-[#2a2a2a] p-3 rounded-lg border border-gray-700 flex flex-col gap-2">
+            <label class="text-xs text-gray-400">Load Saved Configuration</label>
+            <div class="flex gap-2">
+              <select id="saved_configs_select" class="flex-1 text-sm bg-[#1a1a1a]">
+                <option value="">-- Select Configuration --</option>
+              </select>
+              <button type="button" id="load-config-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 text-sm rounded transition-colors">Load</button>
+            </div>
+          </div>
+
           <form id='backtest-form' class="flex-1 flex flex-col justify-between space-y-4">
             <div class="space-y-4">
               <!-- Basic Parameters Group -->
               <div class="grid grid-cols-2 gap-3">
-                <div class="col-span-2">
-                  <label>Algorithm</label>
-                  <select id='algorithm' name='algorithm'></select>
+                <div class="col-span-2 space-y-3">
+                  <label class="toggle-wrapper text-sm text-gray-200">
+                    <input type='checkbox' id='use_strategy_candidates' class="toggle-input hidden" />
+                    <span class="toggle-track">
+                      <span class="toggle-thumb"></span>
+                    </span>
+                    <span>Use Strategy Candidates</span>
+                  </label>
+                  <div class="text-[11px] text-gray-500 -mt-2">When enabled, Run Backtest will auto-refresh the selected strategy assets, rebuild processed data, and snap End Date to the latest shared local coverage before submission.</div>
+
+                  <div id="single-algorithm-section">
+                    <label>Algorithm</label>
+                    <select id='algorithm' name='algorithm'></select>
+                  </div>
+
+                  <div id="strategy-candidates-panel" class="hidden space-y-2">
+                    <div class="text-xs text-gray-400">Enable one or more candidate strategies.</div>
+                    <label class="strategy-option" data-strategy-option="regime_margin_recession_switch_rebalance">
+                      <input type='checkbox' class='strategy-candidate-toggle hidden' data-algorithm='regime_margin_recession_switch_rebalance'>
+                      <span>
+                        <div class="strategy-option-title">Strategy A</div>
+                        <div class="strategy-option-desc">Recession-share hard switch: enter or hold 100% US3M when recession conditions trigger, otherwise hold 100% Nasdaq100.</div>
+                      </span>
+                    </label>
+                    <label class="strategy-option" data-strategy-option="regime_margin_drawdown_prosperity_rebalance">
+                      <input type='checkbox' class='strategy-candidate-toggle hidden' data-algorithm='regime_margin_drawdown_prosperity_rebalance'>
+                      <span>
+                        <div class="strategy-option-title">Strategy B</div>
+                        <div class="strategy-option-desc">Configurable Nasdaq100/US3M base mix plus Nasdaq100 drawdown scale-in, then reset back to that base mix only after prosperity is entered and later fully exits.</div>
+                      </span>
+                    </label>
+                    <div id="strategy-b-base-weights-panel" class="hidden bg-[#171717] border border-gray-700 rounded-lg p-3 space-y-3">
+                      <div class="text-xs text-gray-400">Strategy B Base Mix</div>
+                      <div class="grid grid-cols-2 gap-3">
+                        <div>
+                          <label>Nasdaq100 Base Weight</label>
+                          <input type='number' id='strategy_b_base_nasdaq100_weight' value='0.80' step='0.05' min='0' max='1'>
+                        </div>
+                        <div>
+                          <label>US3M Base Weight</label>
+                          <input type='number' id='strategy_b_base_us3m_weight' value='0.20' step='0.05' min='0' max='1'>
+                        </div>
+                      </div>
+                      <div class="text-[11px] text-gray-500">The two weights will be normalized if they do not sum to 1.0. Drawdown layers add 5% from US3M into Nasdaq100 until the base US3M sleeve is exhausted.</div>
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label>Initial Capital</label>
                   <input type='number' id='initial_capital' value='100000'>
                 </div>
                 <div>
-                  <label>Rebalance Interval (days)</label>
+                  <label>Rebalance Interval (calendar days)</label>
                   <input type='number' id='rebalance_interval_days' placeholder='e.g. 30'>
+                  <div class="text-[11px] text-gray-500 mt-1">The engine rebalances after at least this many natural days have elapsed since the last executed rebalance.</div>
                 </div>
                 <div>
                   <label>Start Date</label>
                   <input type='date' id='start_date' value='2016-01-01'>
+                  <div class="text-[11px] text-gray-500 mt-1">Actual backtest start is auto-aligned to the first date where the selected tradeable assets all have valid prices.</div>
                 </div>
                 <div>
                   <label>End Date</label>
                   <input type='date' id='end_date' value='2026-01-01'>
+                  <div class="text-[11px] text-gray-500 mt-1">In Strategy Candidates mode, this is auto-updated to the latest common local data date across required assets right before the backtest starts.</div>
+                </div>
+                <div>
+                  <label>Max Tilt (0.1 = 10%)</label>
+                  <input type='number' id='max_tilt' value='0.1' step='0.05' min='0' max='1'>
                 </div>
               </div>
 
@@ -112,10 +277,88 @@
                 </div>
                 <div id="asset-pool" class="asset-pool"></div>
 
-                <div>
-                  <label class="text-xs text-gray-400">Strategy Assets</label>
-                  <div id="strategy-dropzone" class="dropzone" data-type="strategy"></div>
-                  <input type='hidden' id='asset_cols'>
+                <label class="toggle-wrapper text-sm text-gray-200">
+                  <input type='checkbox' id='use_regime_asset_pools' class="toggle-input hidden" />
+                  <span class="toggle-track">
+                    <span class="toggle-thumb"></span>
+                  </span>
+                  <span>Use 4-State Asset Pools</span>
+                </label>
+
+                <div id="classic-asset-sections" class="space-y-3">
+                  <div>
+                    <label class="text-xs text-gray-400">Candidate Assets</label>
+                    <div id="strategy-dropzone" class="dropzone" data-type="strategy"></div>
+                    <input type='hidden' id='candidate_assets'>
+                  </div>
+
+                  <div id="candidate-weights-panel" class="hidden bg-[#171717] border border-gray-700 rounded-lg p-3 space-y-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <div>
+                        <div class="text-xs text-gray-400">Candidate Weights</div>
+                        <div class="text-[11px] text-gray-500">Used by permanent_portfolio_rebalance only. Values are normalized automatically and can rebalance from the aligned start date without vol lookback warmup.</div>
+                      </div>
+                      <button type="button" id="reset-candidate-weights-btn" class="text-[10px] px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-gray-200 transition-colors">Reset Equal</button>
+                    </div>
+                    <div id="candidate-weights-editor" class="space-y-2"></div>
+                    <input type='hidden' id='candidate_asset_weights_json'>
+                  </div>
+
+                  <div>
+                    <label class="text-xs text-gray-400">Safe Assets (for Risk-off)</label>
+                    <div id="safe-dropzone" class="dropzone" data-type="safe"></div>
+                    <input type='hidden' id='safe_assets'>
+                  </div>
+                </div>
+
+                <div id="regime-asset-sections" class="space-y-3 hidden">
+                  <div class="text-xs text-gray-400">4-State Asset Pools</div>
+                  <div class="grid grid-cols-1 gap-3">
+                    <div class="bg-[#171717] border border-gray-700 rounded-lg p-3 space-y-2">
+                      <div class="text-xs font-semibold uppercase tracking-wide text-emerald-400">Prosperity</div>
+                      <div>
+                        <label class="text-xs text-gray-500">Risk Assets</label>
+                        <div id="regime-prosperity-candidate-dropzone" class="dropzone" data-type="regime-candidate" data-regime="prosperity"></div>
+                      </div>
+                      <div>
+                        <label class="text-xs text-gray-500">Safe Assets</label>
+                        <div id="regime-prosperity-safe-dropzone" class="dropzone" data-type="regime-safe" data-regime="prosperity"></div>
+                      </div>
+                    </div>
+                    <div class="bg-[#171717] border border-gray-700 rounded-lg p-3 space-y-2">
+                      <div class="text-xs font-semibold uppercase tracking-wide text-amber-400">Inflation</div>
+                      <div>
+                        <label class="text-xs text-gray-500">Risk Assets</label>
+                        <div id="regime-inflation-candidate-dropzone" class="dropzone" data-type="regime-candidate" data-regime="inflation"></div>
+                      </div>
+                      <div>
+                        <label class="text-xs text-gray-500">Safe Assets</label>
+                        <div id="regime-inflation-safe-dropzone" class="dropzone" data-type="regime-safe" data-regime="inflation"></div>
+                      </div>
+                    </div>
+                    <div class="bg-[#171717] border border-gray-700 rounded-lg p-3 space-y-2">
+                      <div class="text-xs font-semibold uppercase tracking-wide text-indigo-400">Deflation</div>
+                      <div>
+                        <label class="text-xs text-gray-500">Risk Assets</label>
+                        <div id="regime-deflation-candidate-dropzone" class="dropzone" data-type="regime-candidate" data-regime="deflation"></div>
+                      </div>
+                      <div>
+                        <label class="text-xs text-gray-500">Safe Assets</label>
+                        <div id="regime-deflation-safe-dropzone" class="dropzone" data-type="regime-safe" data-regime="deflation"></div>
+                      </div>
+                    </div>
+                    <div class="bg-[#171717] border border-gray-700 rounded-lg p-3 space-y-2">
+                      <div class="text-xs font-semibold uppercase tracking-wide text-rose-400">Recession</div>
+                      <div>
+                        <label class="text-xs text-gray-500">Risk Assets</label>
+                        <div id="regime-recession-candidate-dropzone" class="dropzone" data-type="regime-candidate" data-regime="recession"></div>
+                      </div>
+                      <div>
+                        <label class="text-xs text-gray-500">Safe Assets</label>
+                        <div id="regime-recession-safe-dropzone" class="dropzone" data-type="regime-safe" data-regime="recession"></div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div>
@@ -139,37 +382,140 @@
                     <div>
                       <label>Model Type</label>
                       <select id='model_type'>
-                        <option value='kmeans'>kmeans</option>
-                        <option value='autoencoder'>autoencoder</option>
-                        <option value='hmm'>hmm</option>
+                        <option value='kmeans_simple'>kmeans_simple</option>
+                        <option value='kmeans_window'>kmeans_window</option>
+                        <option value='random_forest'>random_forest</option>
+                        <option value='torch_mlp'>torch_mlp</option>
+                        <option value='torch_regression'>torch_regression</option>
+                        <option value='regime_horizon_router'>regime_horizon_router</option>
+                        <option value='bottom_signal_overlay'>bottom_signal_overlay</option>
                       </select>
                     </div>
                     <div>
-                      <label>Lookback Days</label>
-                      <input type='number' id='model_lookback_days' value='60'>
+                      <label>Model Lookback (Trading Days)</label>
+                      <input type='number' id='model_lookback_trading_days' value='60'>
                     </div>
                   </div>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label>Model Artifact</label>
+                      <select id='model_path'>
+                        <option value=''>[none]</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label>Trend Threshold [0,1]</label>
+                      <input type='number' id='model_threshold' value='0.5' step='0.05' min='0' max='1'>
+                    </div>
+                  </div>
+                  <div id="trend-model-summary" class="grid grid-cols-1 gap-2"></div>
+                </div>
+              </div>
+
+              <!-- Volatility & Position Params -->
+              <div class="border-t border-gray-700 pt-3 mt-3 space-y-3">
+                <label class="text-sm font-semibold text-blue-400">Position Sizing & Volatility</label>
+                <div class="grid grid-cols-2 gap-3 transition-opacity duration-200">
                   <div>
-                    <label>Trend Threshold [0,1]</label>
-                    <input type='number' id='model_threshold' value='0.5' step='0.05' min='0' max='1'>
+                    <label>Candidate Top K</label>
+                    <input type='number' id='top_k' value='3' min='1' step='1'>
+                  </div>
+                  <div>
+                    <label>Target Volatility</label>
+                    <input type='number' id='target_volatility' value='0.10' step='0.01' min='0.01' max='1.0'>
+                  </div>
+                  <div>
+                    <label>Vol Lookback Window</label>
+                    <input type='number' id='vol_lookback' value='60' min='10' step='1'>
+                  </div>
+                  <div>
+                    <label>Max Leverage</label>
+                    <input type='number' id='max_leverage' value='1.0' step='0.1' min='1.0' max='5.0'>
+                  </div>
+                  <div>
+                    <label>Max Asset Weight</label>
+                    <input type='number' id='max_asset_weight' value='1.0' step='0.05' min='0.1' max='1.0'>
+                  </div>
+                  <div>
+                    <label>Vol Scale Lookback</label>
+                    <input type='number' id='vol_scale_lookback' value='0' min='0' step='5'>
+                  </div>
+                  <div>
+                    <label>Momentum Threshold</label>
+                    <input type='number' id='momentum_threshold' value='0.0' step='0.01' min='-0.2' max='0.2'>
+                  </div>
+                  <div class="flex items-center gap-2 pt-4">
+                    <input type='checkbox' id='use_sharpe_weighting' class="w-4 h-4 accent-blue-500">
+                    <label class="mb-0">Sharpe Weighting</label>
+                  </div>
+                  <div class="flex items-center gap-2 pt-4">
+                    <input type='checkbox' id='fill_residual_with_safe' class="w-4 h-4 accent-blue-500" checked>
+                    <label class="mb-0">Fill Residual With Safe Assets</label>
+                  </div>
+                  <div class="flex items-center gap-2 pt-4">
+                    <input type='checkbox' id='use_regime_position_sizing' class="w-4 h-4 accent-blue-500">
+                    <label class="mb-0">Use 4-State Regime Position Sizing</label>
                   </div>
                 </div>
+                <div id="position-sizing-summary" class="grid grid-cols-1 gap-2"></div>
               </div>
             </div>
 
-            <div class="pt-4 mt-auto">
+            <div class="pt-4 mt-auto space-y-2">
               <button type='submit' id='run-btn' class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded transition-colors">Run Backtest</button>
+              <button type='button' id='save-config-btn' disabled class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Save Configuration</button>
               <div id='error-msg' class='error'></div>
             </div>
           </form>
         </div>
 
         <!-- RIGHT: Assets Management -->
-        <div class='panel'>
+        <div id='assets-panel' class='panel' style='overflow:hidden;'>
           <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Assets Management</h2>
           <div class="flex gap-2 mb-4 items-center">
             <button type='button' id='refresh-assets-btn' class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm transition-colors">Refresh List</button>
-            <button type='button' id='download-assets-btn' class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded text-sm transition-colors">Download Data</button>
+            <!-- Split-button: Download Data -->
+            <div class="relative inline-flex" id="download-split-container">
+              <button type='button' id='download-assets-btn'
+                class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded-l text-sm transition-colors"
+                title="Download using currently selected source">
+                Download Data
+              </button>
+              <button type='button' id='download-source-toggle'
+                class="bg-orange-800 hover:bg-orange-700 px-2 py-1 rounded-r border-l border-orange-900 text-sm transition-colors"
+                aria-label="Choose download source">
+                ▾ <span id='download-source-label' class='text-xs font-mono'>Auto</span>
+              </button>
+              <!-- Dropdown menu -->
+              <div id='download-source-menu'
+                class="hidden absolute top-full left-0 mt-1 z-50 bg-gray-800 border border-gray-600 rounded shadow-lg min-w-[140px]">
+                <button type='button' data-source='auto'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-green-400 inline-block"></span>Auto (Smart)
+                </button>
+                <button type='button' data-source='yahoo'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-blue-400 inline-block"></span>Yahoo Finance
+                </button>
+                <button type='button' data-source='akshare'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span>AkShare
+                </button>
+                <button type='button' data-source='baostock'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>Baostock
+                </button>
+                <button type='button' data-source='eastmoney'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-cyan-400 inline-block"></span>Eastmoney
+                </button>
+                <hr class="border-gray-600 my-1">
+                <button type='button' data-source='fred'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-red-400 inline-block"></span>FRED (Macro)
+                </button>
+              </div>
+            </div>
             <button type='button' id='process-assets-btn' class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-sm transition-colors">Process Data</button>
             <label class="flex items-center gap-1 text-xs text-gray-400 ml-auto">
               <input type='checkbox' id='select-all-assets'>
@@ -179,17 +525,21 @@
           
           <!-- Fixed height table container -->
           <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
-            <div class="overflow-y-auto border border-gray-800 rounded mb-4" style="max-height: 360px;">
+            <div class="overflow-y-auto border border-gray-800 rounded mb-4 flex-1" style="max-height: none;">
               <table id='assets-table'>
                 <thead>
                   <tr>
                     <th style="width:32px; text-align:center;">Sel</th>
-                    <th>Name</th>
-                    <th>Ticker</th>
-                    <th>Kind</th>
-                    <th>Engine</th>
-                    <th>Data Start</th>
-                    <th>Data End</th>
+                    <th data-sort-key="name">Name<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="ticker">Ticker<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="downloader">Source<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="kind">Kind<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="frequency">Frequency<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="release_rule">Release Rule<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="release_lag_days">Lag Days<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="engine">Engine<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="data_start_date">Data Start<span class="sort-indicator">⇕</span></th>
+                    <th data-sort-key="data_end_date">Data End<span class="sort-indicator">⇕</span></th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -208,7 +558,32 @@
                   <select id='asset_kind'>
                     <option value='price'>price</option>
                     <option value='yield'>yield</option>
+                    <option value='macro'>macro</option>
                   </select>
+                </div>
+                <div>
+                  <label>Frequency</label>
+                  <select id='asset_frequency'>
+                    <option value='d'>daily (d)</option>
+                    <option value='m'>monthly (m)</option>
+                    <option value='q'>quarterly (q)</option>
+                    <option value='a'>annual (a)</option>
+                    <option value='w'>weekly (w)</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Release Rule (macro)</label>
+                  <select id='asset_release_rule'>
+                    <option value=''>Auto / None</option>
+                    <option value='none'>none</option>
+                    <option value='next_thursday'>next_thursday</option>
+                    <option value='third_thursday_same_month'>third_thursday_same_month</option>
+                    <option value='calendar_lag'>calendar_lag</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Release Lag Days (macro)</label>
+                  <input type='number' id='asset_release_lag_days' min='0' step='1' placeholder='e.g. 35'>
                 </div>
                 <div>
                   <label>Engine</label>
@@ -220,6 +595,17 @@
                 </div>
                 <div><label>Initial Start Date</label><input type='date' id='asset_initial_start_date' value='1985-01-02'></div>
                 <div><label>Duration (for bond)</label><input type='number' step='0.1' id='asset_duration' placeholder="20.0"></div>
+                <div>
+                  <label>Downloader</label>
+                  <select id='asset_downloader'>
+                    <option value=''>Auto (inferred from kind/source)</option>
+                    <option value='yahoo'>Yahoo Finance</option>
+                    <option value='akshare'>AkShare</option>
+                    <option value='baostock'>Baostock</option>
+                    <option value='eastmoney'>Eastmoney</option>
+                    <option value='fred'>FRED (Macro)</option>
+                  </select>
+                </div>
                 <div class="col-span-2 flex gap-2 pt-2">
                   <button type='submit' id='save-asset-btn' class="flex-1 bg-green-700 hover:bg-green-600 text-white font-bold py-2 rounded transition-colors text-sm">Save Asset</button>
                   <button type='button' id='new-asset-btn' class="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 rounded transition-colors text-sm">Clear Form</button>
@@ -238,12 +624,24 @@
         </div>
 
         <div id='results-panel' class="hidden space-y-4">
+          <div id='results-tabs-panel' class='panel hidden'>
+            <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Strategy Results</h2>
+            <div id='results-tabs' class='result-tabs'></div>
+          </div>
           <div class='panel'>
-            <h2 class="text-lg font-bold mb-4">Statistics</h2>
+            <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Statistics</h2>
             <div id='stats-grid' class='grid-stats'></div>
           </div>
           <div class='panel'>
-            <h2 class="text-lg font-bold mb-4">Performance Chart</h2>
+            <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Strategy Diagnostics</h2>
+            <div id='strategy-diagnostics-grid' class='grid grid-cols-1 md:grid-cols-2 gap-3'></div>
+          </div>
+          <div class='panel'>
+            <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Future Regime Forecast</h2>
+            <div id='future-forecast-grid' class='grid grid-cols-1 md:grid-cols-2 gap-3'></div>
+          </div>
+          <div class='panel'>
+            <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Performance Chart</h2>
             <iframe id='plot-frame' src=''></iframe>
           </div>
         </div>
@@ -254,21 +652,1014 @@
   <script>
     let lastSavedAssetName = null;
     let allAssetsList = [];
+    let lastBacktestPayload = null;
+    let loadedRegimeCandidateAssets = null;
+    let loadedRegimeSafeAssets = null;
+    let loadedCandidateAssetWeights = null;
+    let availableAlgorithms = [];
+    let currentBatchResults = [];
+    let currentResultIndex = 0;
     const STORAGE_KEY = 'backtest_asset_selection_v1';
+    const REGIME_ORDER = ['prosperity', 'inflation', 'deflation', 'recession'];
+    const REGIME_LABELS = {
+      prosperity: 'Prosperity',
+      inflation: 'Inflation',
+      deflation: 'Deflation',
+      recession: 'Recession',
+    };
+    const STRATEGY_CANDIDATES = [
+      { key: 'regime_margin_recession_switch_rebalance', title: 'Strategy A' },
+      { key: 'regime_margin_drawdown_prosperity_rebalance', title: 'Strategy B' },
+    ];
+    // Table sort state
+    let _tableSortKey = null;   // column key currently sorted by, or null (default order)
+    let _tableSortAsc = true;   // true = ascending, false = descending
+
+    function getRegimeZoneId(regime, bucket) {
+      return `regime-${regime}-${bucket}-dropzone`;
+    }
+
+    function getRegimeZone(regime, bucket) {
+      return document.getElementById(getRegimeZoneId(regime, bucket));
+    }
+
+    function populateZoneWithAssets(zone, names, type) {
+      if (!zone || !Array.isArray(names)) return;
+      names.forEach(name => {
+        if (allAssetsList.find(a => a.name === name) && !zone.querySelector(`[data-name="${name}"]`)) {
+          zone.appendChild(createAssetChip(name, type));
+        }
+      });
+    }
+
+    function buildRegimeMapFromZones(bucket) {
+      const mapping = {};
+      REGIME_ORDER.forEach(regime => {
+        const zone = getRegimeZone(regime, bucket);
+        if (!zone) return;
+        const names = Array.from(zone.querySelectorAll('.asset-chip')).map(chip => chip.dataset.name);
+        if (names.length > 0) mapping[regime] = names;
+      });
+      return Object.keys(mapping).length > 0 ? mapping : null;
+    }
+
+    function clearRegimeZones() {
+      REGIME_ORDER.forEach(regime => {
+        const candidateZone = getRegimeZone(regime, 'candidate');
+        const safeZone = getRegimeZone(regime, 'safe');
+        if (candidateZone) candidateZone.innerHTML = '';
+        if (safeZone) safeZone.innerHTML = '';
+      });
+    }
+
+    function populateRegimeZones(candidateMap, safeMap) {
+      clearRegimeZones();
+      REGIME_ORDER.forEach(regime => {
+        populateZoneWithAssets(getRegimeZone(regime, 'candidate'), (candidateMap || {})[regime], 'regime-candidate');
+        populateZoneWithAssets(getRegimeZone(regime, 'safe'), (safeMap || {})[regime], 'regime-safe');
+      });
+    }
+
+    function updateRegimeAssetPoolMode() {
+      const enabled = document.getElementById('use_regime_asset_pools').checked;
+      document.getElementById('classic-asset-sections').classList.toggle('hidden', enabled);
+      document.getElementById('regime-asset-sections').classList.toggle('hidden', !enabled);
+      const regimeSizingToggle = document.getElementById('use_regime_position_sizing');
+      if (enabled) {
+        regimeSizingToggle.checked = true;
+        regimeSizingToggle.disabled = true;
+      } else {
+        regimeSizingToggle.disabled = false;
+      }
+      updateCandidateWeightsVisibility();
+      refreshPositionSizingSummary();
+    }
+
+    function getSelectedCandidateAssets() {
+      return (document.getElementById('candidate_assets').value || '')
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean);
+    }
+
+    function collectCandidateAssetWeights() {
+      const editor = document.getElementById('candidate-weights-editor');
+      if (!editor) return null;
+      const rows = Array.from(editor.querySelectorAll('[data-weight-asset]'));
+      if (!rows.length) return null;
+
+      const weights = {};
+      let hasPositive = false;
+      rows.forEach(input => {
+        const assetName = input.dataset.weightAsset;
+        const rawValue = Number(input.value);
+        if (assetName && Number.isFinite(rawValue) && rawValue > 0) {
+          weights[assetName] = rawValue;
+          hasPositive = true;
+        }
+      });
+      return hasPositive ? weights : null;
+    }
+
+    function syncCandidateWeightHiddenInput() {
+      const hidden = document.getElementById('candidate_asset_weights_json');
+      if (!hidden) return;
+      const weights = collectCandidateAssetWeights();
+      hidden.value = weights ? JSON.stringify(weights) : '';
+    }
+
+    function renderCandidateWeightEditor(preferredWeights = null) {
+      const panel = document.getElementById('candidate-weights-panel');
+      const editor = document.getElementById('candidate-weights-editor');
+      if (!panel || !editor) return;
+
+      const assetNames = getSelectedCandidateAssets();
+      const existingWeights = preferredWeights || collectCandidateAssetWeights() || loadedCandidateAssetWeights || {};
+      editor.innerHTML = '';
+
+      assetNames.forEach(assetName => {
+        const row = document.createElement('div');
+        row.className = 'weight-row';
+
+        const label = document.createElement('div');
+        label.className = 'weight-label';
+        label.textContent = assetName;
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.step = '0.01';
+        input.dataset.weightAsset = assetName;
+        input.value = existingWeights[assetName] !== undefined ? String(existingWeights[assetName]) : '1';
+        input.addEventListener('input', () => {
+          loadedCandidateAssetWeights = collectCandidateAssetWeights();
+          syncCandidateWeightHiddenInput();
+          refreshPositionSizingSummary();
+        });
+
+        row.appendChild(label);
+        row.appendChild(input);
+        editor.appendChild(row);
+      });
+
+      syncCandidateWeightHiddenInput();
+      updateCandidateWeightsVisibility();
+    }
+
+    function resetCandidateWeightsEqual() {
+      const inputs = Array.from(document.querySelectorAll('#candidate-weights-editor [data-weight-asset]'));
+      inputs.forEach(input => {
+        input.value = '1';
+      });
+      loadedCandidateAssetWeights = collectCandidateAssetWeights();
+      syncCandidateWeightHiddenInput();
+      refreshPositionSizingSummary();
+    }
+
+    function updateCandidateWeightsVisibility() {
+      const panel = document.getElementById('candidate-weights-panel');
+      if (!panel) return;
+      const useRegimeAssetPools = document.getElementById('use_regime_asset_pools').checked;
+      const algorithm = document.getElementById('algorithm').value;
+      const hasCandidates = getSelectedCandidateAssets().length > 0;
+      const show = !useRegimeAssetPools && algorithm === 'permanent_portfolio_rebalance' && hasCandidates;
+      panel.classList.toggle('hidden', !show);
+    }
 
     async function loadAlgorithms() {
       try {
         const res = await fetch('/api/algorithms');
         const algos = await res.json();
+        availableAlgorithms = Array.isArray(algos) ? algos : [];
         const select = document.getElementById('algorithm');
         select.innerHTML = '';
-        algos.forEach(a => {
+        availableAlgorithms.forEach(a => {
           const opt = document.createElement('option');
           opt.value = a.key;
           opt.textContent = a.label;
           select.appendChild(opt);
         });
+        refreshStrategyCandidateAvailability();
       } catch (e) { console.error('Failed to load algorithms', e); }
+    }
+
+    function getAlgorithmLabel(key) {
+      const fromApi = availableAlgorithms.find(item => item.key === key);
+      if (fromApi) return fromApi.label;
+      const fromCandidate = STRATEGY_CANDIDATES.find(item => item.key === key);
+      if (fromCandidate) return fromCandidate.title;
+      return String(key || '').replaceAll('_', ' ');
+    }
+
+    function getSelectedStrategyCandidateAlgorithms() {
+      return Array.from(document.querySelectorAll('.strategy-candidate-toggle'))
+        .filter(input => input.checked && !input.disabled)
+        .map(input => input.dataset.algorithm)
+        .filter(Boolean);
+    }
+
+    function syncStrategyCandidateOptionStyles() {
+      document.querySelectorAll('.strategy-candidate-toggle').forEach(input => {
+        const option = document.querySelector(`[data-strategy-option="${input.dataset.algorithm}"]`);
+        if (!option) return;
+        option.classList.toggle('active', input.checked && !input.disabled);
+      });
+    }
+
+    function refreshStrategyCandidateAvailability() {
+      const availableKeys = new Set((availableAlgorithms || []).map(item => item.key));
+      document.querySelectorAll('.strategy-candidate-toggle').forEach(input => {
+        const key = input.dataset.algorithm;
+        const option = document.querySelector(`[data-strategy-option="${key}"]`);
+        const enabled = availableKeys.has(key);
+        input.disabled = !enabled;
+        if (!enabled) input.checked = false;
+        if (option) option.classList.toggle('disabled', !enabled);
+      });
+      syncStrategyCandidateOptionStyles();
+      updateStrategyCandidateMode();
+    }
+
+    function updateStrategyCandidateMode() {
+      const enabled = document.getElementById('use_strategy_candidates').checked;
+      const singleSection = document.getElementById('single-algorithm-section');
+      const candidatePanel = document.getElementById('strategy-candidates-panel');
+      if (singleSection) singleSection.classList.toggle('hidden', enabled);
+      if (candidatePanel) candidatePanel.classList.toggle('hidden', !enabled);
+      updateStrategyBBaseWeightsVisibility();
+      updateCandidateWeightsVisibility();
+      syncStrategyCandidateOptionStyles();
+    }
+
+    function updateStrategyBBaseWeightsVisibility() {
+      const panel = document.getElementById('strategy-b-base-weights-panel');
+      if (!panel) return;
+      const useStrategyCandidates = document.getElementById('use_strategy_candidates').checked;
+      const singleAlgorithm = document.getElementById('algorithm').value;
+      const strategyBSelected = useStrategyCandidates
+        ? getSelectedStrategyCandidateAlgorithms().includes('regime_margin_drawdown_prosperity_rebalance')
+        : singleAlgorithm === 'regime_margin_drawdown_prosperity_rebalance';
+      panel.classList.toggle('hidden', !strategyBSelected);
+    }
+
+    async function loadTrendModels(modelType = '', preferredValue = '') {
+      try {
+        const query = modelType ? `?model_type=${encodeURIComponent(modelType)}` : '';
+        const res = await fetch(`/api/trend_models${query}`);
+        const models = await res.json();
+        populateTrendModelOptions(models, preferredValue);
+      } catch (e) {
+        console.error('Failed to load trend models', e);
+        populateTrendModelOptions([], '');
+      }
+    }
+
+    function populateTrendModelOptions(models, preferredValue = '') {
+      const select = document.getElementById('model_path');
+      if (!select) return;
+
+      const currentValue = preferredValue || select.value;
+      const filteredModels = Array.isArray(models) ? models : [];
+
+      select.innerHTML = '';
+
+      const noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = filteredModels.length ? '[none]' : '[no compatible model folders found]';
+      select.appendChild(noneOpt);
+
+      filteredModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.key;
+        opt.textContent = m.label;
+        select.appendChild(opt);
+      });
+
+      if (filteredModels.some(m => m.key === currentValue)) {
+        select.value = currentValue;
+      } else {
+        select.value = '';
+      }
+      refreshTrendModelSummary();
+    }
+
+    function formatPct(value, digits = 0) {
+      const n = Number(value);
+      if (Number.isNaN(n)) return 'n/a';
+      return `${(n * 100).toFixed(digits)}%`;
+    }
+
+    function formatApiError(detail) {
+      if (!detail) return 'Unknown error';
+      if (typeof detail === 'string') return detail;
+      if (Array.isArray(detail)) {
+        return detail.map(item => formatApiError(item)).join('; ');
+      }
+      if (typeof detail === 'object') {
+        if (detail.msg) {
+          const path = Array.isArray(detail.loc) ? detail.loc.join(' -> ') : '';
+          return path ? `${path}: ${detail.msg}` : detail.msg;
+        }
+        try {
+          return JSON.stringify(detail);
+        } catch (e) {
+          return String(detail);
+        }
+      }
+      return String(detail);
+    }
+
+    function getRequiredAssetsForStrategyAlgorithms(selectedAlgorithms) {
+      const required = new Set();
+      (selectedAlgorithms || []).forEach(key => {
+        if (
+          key === 'regime_margin_recession_switch_rebalance' ||
+          key === 'regime_margin_drawdown_prosperity_rebalance'
+        ) {
+          required.add('Nasdaq100');
+          required.add('US3M');
+        }
+      });
+      return Array.from(required);
+    }
+
+    function collectBacktestRequiredAssets({
+      useStrategyCandidates,
+      selectedStrategyAlgorithms,
+      useRegimeAssetPools,
+      selectedAssetCols,
+      selectedBenchmarkCols,
+      selectedSafeCols,
+      selectedRegimeCols,
+    }) {
+      const names = new Set();
+      const addMany = values => {
+        (values || []).forEach(value => {
+          const name = String(value || '').trim();
+          if (name) names.add(name);
+        });
+      };
+
+      addMany(selectedBenchmarkCols);
+      if (useRegimeAssetPools) {
+        addMany(selectedRegimeCols);
+      } else {
+        addMany(selectedAssetCols);
+        addMany(selectedSafeCols.length > 0 ? selectedSafeCols : ['20Y_Treasury_ETF', 'GoldIndex', 'US3M']);
+      }
+      if (useStrategyCandidates) {
+        addMany(getRequiredAssetsForStrategyAlgorithms(selectedStrategyAlgorithms));
+      }
+      return Array.from(names);
+    }
+
+    async function triggerSelectedAssetDownload(selectedNames) {
+      const currentSource = document.getElementById('download-source-toggle').dataset.selected || 'auto';
+      const payload = { names: selectedNames };
+      if (currentSource && currentSource !== 'auto') {
+        payload.downloader = currentSource;
+      }
+      const res = await fetch('/api/assets/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(formatApiError(data.detail || 'Asset download failed'));
+      }
+      return data;
+    }
+
+    async function triggerFullAssetProcessing() {
+      const res = await fetch('/api/assets/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(formatApiError(data.detail || 'Asset processing failed'));
+      }
+      return data;
+    }
+
+    async function syncEndDateToLatestSharedCoverage(requiredAssets) {
+      await loadAssets();
+      const assetEndDates = requiredAssets
+        .map(name => {
+          const asset = allAssetsList.find(item => item.name === name);
+          return {
+            name,
+            processed: Boolean(asset && asset.processed),
+            endDate: asset && asset.data_end_date ? String(asset.data_end_date) : null,
+          };
+        });
+
+      const missingCoverage = assetEndDates.filter(item => !item.endDate).map(item => item.name);
+      if (missingCoverage.length > 0) {
+        throw new Error(
+          'Missing local data coverage after refresh: ' + missingCoverage.join(', ')
+        );
+      }
+
+      const unprocessed = assetEndDates.filter(item => !item.processed).map(item => item.name);
+      if (unprocessed.length > 0) {
+        throw new Error(
+          'Some required assets are still not processed: ' + unprocessed.join(', ')
+        );
+      }
+
+      const latestSharedEndDate = assetEndDates
+        .map(item => item.endDate)
+        .reduce((minDate, current) => {
+          if (!minDate) return current;
+          return current < minDate ? current : minDate;
+        }, null);
+
+      if (!latestSharedEndDate) {
+        throw new Error('Unable to determine latest shared end date for the current backtest selection.');
+      }
+
+      const endDateInput = document.getElementById('end_date');
+      endDateInput.value = latestSharedEndDate;
+      refreshTrendModelSummary();
+      return latestSharedEndDate;
+    }
+
+    function createSummaryCard(title, lines) {
+      const div = document.createElement('div');
+      div.className = 'summary-card';
+      const titleEl = document.createElement('div');
+      titleEl.className = 'summary-title';
+      titleEl.textContent = title;
+      div.appendChild(titleEl);
+      lines.forEach(line => {
+        const lineEl = document.createElement('div');
+        lineEl.className = 'summary-line';
+        lineEl.innerHTML = line;
+        div.appendChild(lineEl);
+      });
+      return div;
+    }
+
+    function getForecastFillColor(regime) {
+      switch ((regime || '').toLowerCase()) {
+        case 'prosperity': return '#34d399';
+        case 'inflation': return '#f59e0b';
+        case 'deflation': return '#60a5fa';
+        case 'recession': return '#fb7185';
+        default: return '#9ca3af';
+      }
+    }
+
+    function renderFutureRegimeForecast(forecast) {
+      const container = document.getElementById('future-forecast-grid');
+      if (!container) return;
+      container.innerHTML = '';
+
+      if (!forecast || typeof forecast !== 'object') {
+        container.appendChild(createSummaryCard('Forecast Status', [
+          '<span class="summary-muted">This backtest did not return an online future regime forecast.</span>',
+        ]));
+        return;
+      }
+
+      const regime = String(forecast.regime || 'sideways').toLowerCase();
+      const confidenceMargin = Number(forecast.confidence_margin);
+      const score = Number(forecast.score);
+      const requestedAnchor = forecast.anchor_date_requested || 'n/a';
+      const usedAnchor = forecast.anchor_date_used || 'n/a';
+      const mode = forecast.mode || 'online_future_inference';
+      const badgeClass = ['forecast-badge', regime].join(' ');
+
+      container.appendChild(createSummaryCard('Forecast Summary', [
+        `Regime: <span class="${badgeClass}">${regime}</span>`,
+        `Anchor requested: <strong>${requestedAnchor}</strong>`,
+        `Anchor used: <strong>${usedAnchor}</strong>`,
+        `Confidence margin: <strong>${Number.isFinite(confidenceMargin) ? confidenceMargin.toFixed(4) : 'n/a'}</strong>`,
+        `Score: <strong>${Number.isFinite(score) ? score.toFixed(4) : 'n/a'}</strong>`,
+        `Inference mode: <span class="summary-muted">${mode}</span>`,
+      ]));
+
+      const probabilities = forecast.probabilities || {};
+      const probabilityCard = document.createElement('div');
+      probabilityCard.className = 'summary-card';
+      probabilityCard.innerHTML = '<div class="summary-title">Probability Surface</div>';
+      ['prosperity', 'inflation', 'deflation', 'recession'].forEach(label => {
+        const value = Number(probabilities[label]);
+        const row = document.createElement('div');
+        row.className = 'forecast-prob-row';
+        row.innerHTML = `
+          <div class="forecast-prob-label">${label}</div>
+          <div class="forecast-prob-track">
+            <div class="forecast-prob-fill" style="width:${Number.isFinite(value) ? Math.max(0, Math.min(100, value * 100)) : 0}%; background:${getForecastFillColor(label)}"></div>
+          </div>
+          <div class="forecast-prob-value">${Number.isFinite(value) ? (value * 100).toFixed(1) + '%' : 'n/a'}</div>
+        `;
+        probabilityCard.appendChild(row);
+      });
+      container.appendChild(probabilityCard);
+
+      const aggregateLevels = forecast.aggregate_levels || {};
+      container.appendChild(createSummaryCard('Aggregate Axes', [
+        `Growth/Credit: <strong>${Number.isFinite(Number(aggregateLevels.growth_credit_axis)) ? Number(aggregateLevels.growth_credit_axis).toFixed(4) : 'n/a'}</strong>`,
+        `Inflation: <strong>${Number.isFinite(Number(aggregateLevels.inflation_axis)) ? Number(aggregateLevels.inflation_axis).toFixed(4) : 'n/a'}</strong>`,
+        `Rates/Policy: <strong>${Number.isFinite(Number(aggregateLevels.rates_policy_axis)) ? Number(aggregateLevels.rates_policy_axis).toFixed(4) : 'n/a'}</strong>`,
+      ]));
+
+      const perHorizon = forecast.per_horizon || {};
+      const horizonLines = Object.keys(perHorizon)
+        .sort((a, b) => Number(a) - Number(b))
+        .map(horizon => {
+          const item = perHorizon[horizon] || {};
+          const selectedRouterModel = item.selected_router_model || 'n/a';
+          const anchorDate = item.anchor_date || usedAnchor;
+          return `${horizon}d: <strong>${selectedRouterModel}</strong> <span class="summary-muted">@ ${anchorDate}</span>`;
+        });
+      container.appendChild(createSummaryCard('Per-Horizon Router', horizonLines.length ? horizonLines : [
+        '<span class="summary-muted">No per-horizon router details.</span>',
+      ]));
+    }
+
+    function renderStrategyDiagnostics(diagnostics) {
+      const container = document.getElementById('strategy-diagnostics-grid');
+      if (!container) return;
+      container.innerHTML = '';
+
+      if (!diagnostics || typeof diagnostics !== 'object') {
+        container.appendChild(createSummaryCard('Strategy State', [
+          '<span class="summary-muted">No strategy diagnostics were returned.</span>',
+        ]));
+        return;
+      }
+
+      const drawdown = Number(diagnostics.nasdaq100_drawdown_from_peak);
+      const prosperityShare = Number(diagnostics.prosperity_share_20d);
+      const recessionShare = Number(diagnostics.recession_share_20d);
+      const weights = diagnostics.weights || {};
+      const decisionInfo = diagnostics.decision_info || {};
+      const layerCount = diagnostics.drawdown_layer_count ?? decisionInfo.drawdown_layers ?? 'n/a';
+      const regime = String(diagnostics.regime || 'sideways').toLowerCase();
+      const sourceMode = String(diagnostics.regime_source_mode || 'default');
+      const sourceClass = ['source-badge', sourceMode.replaceAll('_', '-')].join(' ');
+      const sourceLabelMap = {
+        historical_router_table: 'historical table',
+        online_current_fallback: 'online fallback',
+        default: 'default',
+      };
+      const sourceLabel = sourceLabelMap[sourceMode] || sourceMode.replaceAll('_', ' ');
+      const anchorRequested = diagnostics.regime_anchor_requested || 'n/a';
+      const anchorUsed = diagnostics.regime_anchor_used || 'n/a';
+
+      container.appendChild(createSummaryCard('Overlay State', [
+        `Current regime: <span class="forecast-badge ${regime}">${regime}</span>`,
+        `Regime source: <span class="${sourceClass}">${sourceLabel}</span>`,
+        `Anchor requested: <strong>${anchorRequested}</strong>`,
+        `Anchor used: <strong>${anchorUsed}</strong>`,
+        `Mode: <strong>${diagnostics.mode || 'n/a'}</strong>`,
+        `5% drawdown layers: <strong>${layerCount}</strong>`,
+        `Current drawdown: <strong>${Number.isFinite(drawdown) ? (drawdown * 100).toFixed(2) + '%' : 'n/a'}</strong>`,
+        `Prosperity share 20d: <strong>${Number.isFinite(prosperityShare) ? (prosperityShare * 100).toFixed(1) + '%' : 'n/a'}</strong>`,
+        `Recession share 20d: <strong>${Number.isFinite(recessionShare) ? (recessionShare * 100).toFixed(1) + '%' : 'n/a'}</strong>`,
+      ]));
+
+      container.appendChild(createSummaryCard('Current Weights', [
+        `Nasdaq100: <strong>${Number.isFinite(Number(weights.Nasdaq100)) ? (Number(weights.Nasdaq100) * 100).toFixed(1) + '%' : 'n/a'}</strong>`,
+        `US3M: <strong>${Number.isFinite(Number(weights.US3M)) ? (Number(weights.US3M) * 100).toFixed(1) + '%' : 'n/a'}</strong>`,
+      ]));
+
+      const detailLines = Object.entries(decisionInfo).map(([key, value]) => {
+        const label = String(key).replaceAll('_', ' ');
+        return `${label}: <span class="summary-muted">${value}</span>`;
+      });
+      container.appendChild(createSummaryCard('Latest Decision', detailLines.length ? detailLines : [
+        '<span class="summary-muted">No rebalance decision details.</span>',
+      ]));
+    }
+
+    function renderSingleBacktestResult(result) {
+      const statsGrid = document.getElementById('stats-grid');
+      const plotFrame = document.getElementById('plot-frame');
+      if (!result || !statsGrid || !plotFrame) return;
+
+      const s = result.stats;
+      const metrics = [
+        { label: 'Total Return', value: (s['Total Return'] * 100).toFixed(2) + '%' },
+        { label: 'CAGR', value: (s['CAGR'] * 100).toFixed(2) + '%' },
+        { label: 'Sharpe Ratio', value: s['Sharpe Ratio'].toFixed(2) },
+        { label: 'Max Drawdown', value: (s['Max Drawdown'] * 100).toFixed(2) + '%' },
+        { label: 'Volatility', value: (s['Volatility'] * 100).toFixed(2) + '%' },
+        { label: 'Alpha', value: (s['Alpha'] * 100).toFixed(2) + '%' },
+        { label: 'Beta', value: s['Beta'].toFixed(2) },
+        { label: 'Info Ratio', value: s['Information Ratio'].toFixed(2) },
+        { label: 'Calmar Ratio', value: s['Calmar Ratio'].toFixed(2) },
+        { label: 'Max Recovery', value: s['Max Recovery Days'] + ' days' },
+        { label: 'Win Rate', value: (s['Win Rate'] * 100).toFixed(2) + '%' },
+        { label: 'P/L Ratio', value: s['P/L Ratio'].toFixed(2) },
+        { label: 'Years', value: s['Years'].toFixed(1) },
+      ];
+
+      const metricDescs = {
+        'Total Return': '回测期内策略的总绝对收益率。<br/>正值越大越好；负值为亏损。',
+        'CAGR': '复合年化收益率 (Compound Annual Growth Rate)。<br/>>15% 优秀，10~15% 良好，<5% 较差。',
+        'Sharpe Ratio': '夏普比率，衡量风险调整后收益，(年化收益)/(年化波动)。<br/>>1 优秀，>0.5 良好，<0 为承担了风险却不如无风险收益。',
+        'Max Drawdown': '最大回撤，期内资产净值自高点下跌的最大百分比。<br/>幅度越小越好；>-10% 极佳，-10~-20% 良好，<-30% 风险较高。',
+        'Volatility': '策略收益的年化波动率(标准差)。<br/>波动越小风险越低；正常多资产策略一般在 10% 左右。',
+        'Alpha': '超额收益，根据Beta模型剔除市场基准后的年化超额部分。<br/>>0 创造了相对于基准的超额收益；<0 则为负超额。',
+        'Beta': '衡量策略收益对基准标的波动的敏感度(系统性风险)。<br/>=1 与基准同等波动；<1 波动较基准小；>1 波动放大。',
+        'Info Ratio': '信息比率，单位残差风险带来的超额收益，(超额均值)/(超额标准差)。<br/>>0.5 良好，>1 优秀。',
+        'Calmar Ratio': '卡玛比率，年化收益与最大回撤(绝对值)的比值。<br/>>2 优秀，1~2 良好，<1 较差。',
+        'Max Recovery': '最长恢复期，资产净值创新高之间的最长间隔天数。<br/>天数越少越好，说明解套越快；建议最好在一年(365天)以内。',
+        'Win Rate': '交易胜率，收益为正的天数占总交易天数的比例。<br/>>55% 优秀，日频回测中 >50% 即有稳定正向期望。',
+        'P/L Ratio': '盈亏比，平均盈利与平均绝对亏损的比率。<br/>>1 代表平均单次盈利高于平均单次亏损，越大越好。',
+        'Years': '本次回测时间跨度的等效年份总数。',
+      };
+
+      function getMetricColor(label, valueRaw) {
+        const val = parseFloat(String(valueRaw).replace('%', '').replace(' days', ''));
+        if (isNaN(val)) return '';
+
+        const good = '#ef4444';
+        const okay = '#f97316';
+        const bad = '#3b82f6';
+
+        switch (label) {
+          case 'Total Return': case 'CAGR': case 'Alpha':
+            if (val > 15) return good; if (val > 0) return okay; return bad;
+          case 'Sharpe Ratio': case 'Info Ratio':
+            if (val > 1) return good; if (val > 0) return okay; return bad;
+          case 'Max Drawdown':
+            if (val > -10) return good; if (val > -20) return okay; return bad;
+          case 'Volatility':
+            if (val < 10) return good; if (val < 15) return okay; return bad;
+          case 'Calmar Ratio':
+            if (val > 2) return good; if (val > 1) return okay; return bad;
+          case 'Max Recovery':
+            if (val < 180) return good; if (val < 365) return okay; return bad;
+          case 'Win Rate':
+            if (val > 55) return good; if (val > 50) return okay; return bad;
+          case 'P/L Ratio':
+            if (val > 1.2) return good; if (val > 1.0) return okay; return bad;
+          default:
+            return '';
+        }
+      }
+
+      statsGrid.innerHTML = '';
+      metrics.forEach(m => {
+        const card = document.createElement('div');
+        card.className = 'stat-card';
+        const desc = metricDescs[m.label] || '';
+        const valColor = getMetricColor(m.label, m.value);
+        const styleStr = valColor ? `style="color:${valColor}"` : '';
+        card.innerHTML = `
+          <div class='tooltip'>${desc}</div>
+          <div class='stat-label'>${m.label}</div>
+          <div class='stat-value' ${styleStr}>${m.value}</div>
+        `;
+        statsGrid.appendChild(card);
+      });
+
+      renderStrategyDiagnostics(result.strategy_diagnostics || null);
+      renderFutureRegimeForecast(result.future_regime_forecast || null);
+      plotFrame.src = result.result_url + '?t=' + new Date().getTime();
+    }
+
+    function renderResultTabs(results) {
+      const tabsPanel = document.getElementById('results-tabs-panel');
+      const tabs = document.getElementById('results-tabs');
+      if (!tabsPanel || !tabs) return;
+
+      tabs.innerHTML = '';
+      if (!Array.isArray(results) || results.length <= 1) {
+        tabsPanel.classList.add('hidden');
+        return;
+      }
+
+      tabsPanel.classList.remove('hidden');
+      results.forEach((result, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'result-tab' + (index === currentResultIndex ? ' active' : '');
+        button.textContent = getAlgorithmLabel(result.algorithm);
+        button.onclick = () => {
+          currentResultIndex = index;
+          renderResultTabs(currentBatchResults);
+          renderSingleBacktestResult(currentBatchResults[currentResultIndex]);
+        };
+        tabs.appendChild(button);
+      });
+    }
+
+    async function refreshTrendModelSummary() {
+      const container = document.getElementById('trend-model-summary');
+      if (!container) return;
+      container.innerHTML = '';
+
+      const enabled = document.getElementById('use_trend_model').checked;
+      const modelType = document.getElementById('model_type').value;
+      const modelPath = document.getElementById('model_path').value;
+      const lookback = document.getElementById('model_lookback_trading_days').value || '60';
+      const threshold = document.getElementById('model_threshold').value || '0.5';
+      const endDate = document.getElementById('end_date').value;
+
+      if (!enabled) {
+        container.appendChild(createSummaryCard('Trend Model', ['<span class="summary-muted">Trend model disabled.</span>']));
+        return;
+      }
+
+      container.appendChild(createSummaryCard('Trend Gate', [
+        `Type: <strong>${modelType || 'n/a'}</strong>`,
+        `Artifact: <span class="summary-muted">${modelPath || '[none]'}</span>`,
+        `Lookback: <strong>${lookback}</strong> trading days`,
+        `Threshold: <strong>${threshold}</strong>`,
+      ]));
+
+      if (!modelPath) {
+        container.appendChild(createSummaryCard('Artifact Summary', ['<span class="summary-warn">No model artifact selected.</span>']));
+        return;
+      }
+
+      try {
+        const query = `?model_type=${encodeURIComponent(modelType)}&model_path=${encodeURIComponent(modelPath)}`;
+        const res = await fetch(`/api/trend_model_artifact${query}`);
+        if (!res.ok) throw new Error('Failed to fetch trend model artifact summary');
+        const info = await res.json();
+
+        if (info.model_type === 'bottom_signal_overlay') {
+          container.appendChild(createSummaryCard('BottomSignal Overlay', [
+            `Target asset: <strong>${info.target_asset || 'n/a'}</strong>`,
+            `Breadth basket: <strong>${info.breadth_asset_count ?? 0}</strong> assets`,
+            `Windows: z=<strong>${info.zscore_window}</strong>, ma=<strong>${info.ma_window}</strong>, mom=<strong>${info.momentum_window}</strong>, breadth lag=<strong>${info.breadth_lag}</strong>`,
+            `Trigger: neutral <strong>${info.router_neutral_min}</strong> to <strong>${info.router_neutral_max}</strong>, activation <strong>${info.activation_threshold}</strong>, weight <strong>${info.overlay_weight}</strong>`,
+          ]));
+
+          const base = info.base_summary || {};
+          const baseLines = [
+            `Base router preset: <strong>${base.ui_preset || info.base_model_type || 'n/a'}</strong>`,
+            `Signal formula: <span class="summary-muted">${base.signal_formula || 'n/a'}</span>`,
+            `Horizon weights: <span class="summary-muted">${JSON.stringify(base.horizon_weights || {})}</span>`,
+            `Coverage: <strong>${(base.benchmark_interval || {}).start_date || 'n/a'}</strong> to <strong>${(base.benchmark_interval || {}).end_date || 'n/a'}</strong>`,
+          ];
+          if (endDate && base.benchmark_interval && base.benchmark_interval.end_date && endDate > base.benchmark_interval.end_date) {
+            baseLines.push(`<span class="summary-warn">Current end date ${endDate} exceeds router coverage end ${base.benchmark_interval.end_date}.</span>`);
+          }
+          container.appendChild(createSummaryCard('Base Router', baseLines));
+          return;
+        }
+
+        if (info.model_type === 'regime_horizon_router') {
+          const lines = [
+            `Preset: <strong>${info.ui_preset || 'n/a'}</strong>`,
+            `Signal formula: <span class="summary-muted">${info.signal_formula || 'n/a'}</span>`,
+            `Horizon weights: <span class="summary-muted">${JSON.stringify(info.horizon_weights || {})}</span>`,
+            `Coverage: <strong>${(info.benchmark_interval || {}).start_date || 'n/a'}</strong> to <strong>${(info.benchmark_interval || {}).end_date || 'n/a'}</strong>`,
+          ];
+          container.appendChild(createSummaryCard('Router Summary', lines));
+          return;
+        }
+
+        container.appendChild(createSummaryCard('Artifact Summary', ['<span class="summary-muted">No specialized summary for this model type.</span>']));
+      } catch (e) {
+        console.error('Failed to load trend model summary', e);
+        container.appendChild(createSummaryCard('Artifact Summary', ['<span class="summary-warn">Artifact summary unavailable.</span>']));
+      }
+    }
+
+    function refreshPositionSizingSummary() {
+      const container = document.getElementById('position-sizing-summary');
+      if (!container) return;
+      container.innerHTML = '';
+
+      const topK = document.getElementById('top_k').value || '3';
+      const targetVol = document.getElementById('target_volatility').value || '0.10';
+      const volLookback = document.getElementById('vol_lookback').value || '60';
+      const maxLeverage = document.getElementById('max_leverage').value || '1.0';
+      const maxAssetWeight = document.getElementById('max_asset_weight').value || '1.0';
+      const volScaleLookback = document.getElementById('vol_scale_lookback').value || '0';
+      const momentumThreshold = document.getElementById('momentum_threshold').value || '0.0';
+      const useSharpeWeighting = document.getElementById('use_sharpe_weighting').checked;
+      const fillResidual = document.getElementById('fill_residual_with_safe').checked;
+      const useRegimeSizing = document.getElementById('use_regime_position_sizing').checked;
+      const useRegimeAssetPools = document.getElementById('use_regime_asset_pools').checked;
+      const selectedAssets = (document.getElementById('candidate_assets').value || '').split(',').filter(Boolean);
+      const safeAssets = (document.getElementById('safe_assets').value || '').split(',').filter(Boolean);
+      const candidateWeights = collectCandidateAssetWeights();
+      const regimeCandidateAssets = buildRegimeMapFromZones('candidate');
+      const regimeSafeAssets = buildRegimeMapFromZones('safe');
+
+      if (useRegimeAssetPools) {
+        const uniqueCandidates = new Set();
+        const uniqueSafe = new Set();
+        REGIME_ORDER.forEach(regime => {
+          ((regimeCandidateAssets || {})[regime] || []).forEach(name => uniqueCandidates.add(name));
+          ((regimeSafeAssets || {})[regime] || []).forEach(name => uniqueSafe.add(name));
+        });
+
+        container.appendChild(createSummaryCard('4-State Asset Pools', REGIME_ORDER.map(regime => {
+          const riskCount = ((regimeCandidateAssets || {})[regime] || []).length;
+          const safeCount = ((regimeSafeAssets || {})[regime] || []).length;
+          return `${REGIME_LABELS[regime]}: <strong>${riskCount}</strong> risk, <strong>${safeCount}</strong> safe`;
+        })));
+
+        container.appendChild(createSummaryCard('Selection & Risk Target', [
+          `Unique regime candidates: <strong>${uniqueCandidates.size}</strong>`,
+          `Unique regime safe assets: <strong>${uniqueSafe.size}</strong>`,
+          `Top K: <strong>${topK}</strong>`,
+          `Target volatility: <strong>${formatPct(targetVol, 0)}</strong>`,
+          `Vol lookback: <strong>${volLookback}</strong> days${Number(volScaleLookback) > 0 ? `, scale window <strong>${volScaleLookback}</strong> days` : ', scale window uses main vol lookback'}`,
+          `Rebalance cadence: <strong>${document.getElementById('rebalance_interval_days').value || '30'}</strong> calendar days`,
+        ]));
+
+        container.appendChild(createSummaryCard('Constraints & Allocation', [
+          `Max leverage: <strong>${maxLeverage}x</strong>`,
+          `Max asset weight: <strong>${formatPct(maxAssetWeight, 0)}</strong>`,
+          `Momentum threshold: <strong>${formatPct(momentumThreshold, 0)}</strong>`,
+          `Weighting mode: <strong>${useSharpeWeighting ? 'Sharpe weighting' : 'Return weighting'}</strong>`,
+          `Regime sizing: <strong>${useRegimeSizing ? '4-state overlay enabled' : 'disabled'}</strong>`,
+          `Residual capital: <strong>${fillResidual ? 'sent to regime-specific safe assets' : 'left as cash'}</strong>`,
+        ]));
+        return;
+      }
+
+      container.appendChild(createSummaryCard('Selection & Risk Target', [
+        `Selected candidates: <strong>${selectedAssets.length}</strong>`,
+        `Top K: <strong>${topK}</strong>`,
+        `Target volatility: <strong>${formatPct(targetVol, 0)}</strong>`,
+        `Vol lookback: <strong>${volLookback}</strong> days${Number(volScaleLookback) > 0 ? `, scale window <strong>${volScaleLookback}</strong> days` : ', scale window uses main vol lookback'}`,
+        `Rebalance cadence: <strong>${document.getElementById('rebalance_interval_days').value || '30'}</strong> calendar days`,
+      ]));
+
+      container.appendChild(createSummaryCard('Constraints & Allocation', [
+        `Max leverage: <strong>${maxLeverage}x</strong>`,
+        `Max asset weight: <strong>${formatPct(maxAssetWeight, 0)}</strong>`,
+        `Momentum threshold: <strong>${formatPct(momentumThreshold, 0)}</strong>`,
+        `Weighting mode: <strong>${useSharpeWeighting ? 'Sharpe weighting' : 'Return weighting'}</strong>`,
+        `Regime sizing: <strong>${useRegimeSizing ? '4-state overlay enabled' : 'disabled'}</strong>`,
+        `Residual capital: <strong>${fillResidual ? `sent to safe assets (${safeAssets.join(', ') || 'none selected'})` : 'left as cash'}</strong>`,
+      ]));
+
+      if (document.getElementById('algorithm').value === 'permanent_portfolio_rebalance' && candidateWeights) {
+        const total = Object.values(candidateWeights).reduce((sum, value) => sum + Number(value), 0);
+        const lines = selectedAssets.map(assetName => {
+          const rawWeight = Number(candidateWeights[assetName] || 0);
+          const normalized = total > 0 ? rawWeight / total : 0;
+          return `${assetName}: <strong>${(normalized * 100).toFixed(1)}%</strong> <span class="summary-muted">(raw ${rawWeight.toFixed(2)})</span>`;
+        });
+        lines.push('<span class="summary-muted">First trade happens on the aligned start date once all selected assets have valid prices.</span>');
+        container.appendChild(createSummaryCard('Permanent Portfolio Weights', lines));
+      }
+    }
+
+    async function loadSavedConfigs() {
+      try {
+        const res = await fetch('/api/configs/best');
+        const configs = await res.json();
+        const select = document.getElementById('saved_configs_select');
+        select.innerHTML = '<option value="">-- Select Configuration --</option>';
+        configs.forEach(cfg => {
+          const opt = document.createElement('option');
+          opt.value = cfg;
+          opt.textContent = cfg;
+          select.appendChild(opt);
+        });
+      } catch (e) {
+        console.error('Failed to load saved configurations', e);
+      }
+    }
+
+    async function handleLoadConfig() {
+      const filename = document.getElementById('saved_configs_select').value;
+      if (!filename) {
+        alert('Please select a configuration to load.');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/configs/best/${filename}`);
+        if (!res.ok) throw new Error('Failed to fetch config');
+        const cfg = await res.json();
+        loadedRegimeCandidateAssets = cfg.regime_candidate_assets || null;
+        loadedRegimeSafeAssets = cfg.regime_safe_assets || null;
+        loadedCandidateAssetWeights = cfg.candidate_asset_weights || null;
+        const selectedAlgorithmsFromConfig = Array.isArray(cfg.selected_algorithms)
+          ? cfg.selected_algorithms.filter(Boolean)
+          : [];
+        const strategySelectorEnabled = Boolean(
+          cfg.strategy_selector_enabled || selectedAlgorithmsFromConfig.length
+        );
+        const selectedAlgorithms = strategySelectorEnabled
+          ? (selectedAlgorithmsFromConfig.length ? selectedAlgorithmsFromConfig : (cfg.algorithm ? [cfg.algorithm] : []))
+          : [];
+        const useRegimeAssetPools = Boolean(
+          (loadedRegimeCandidateAssets && Object.keys(loadedRegimeCandidateAssets).length) ||
+          (loadedRegimeSafeAssets && Object.keys(loadedRegimeSafeAssets).length)
+        );
+        
+        // Fill form fields
+        if (cfg.algorithm) document.getElementById('algorithm').value = cfg.algorithm;
+        document.getElementById('use_strategy_candidates').checked = strategySelectorEnabled;
+        document.querySelectorAll('.strategy-candidate-toggle').forEach(input => {
+          input.checked = selectedAlgorithms.includes(input.dataset.algorithm);
+        });
+        updateStrategyCandidateMode();
+        if (cfg.initial_capital) document.getElementById('initial_capital').value = cfg.initial_capital;
+        if (cfg.rebalance_interval_days) document.getElementById('rebalance_interval_days').value = cfg.rebalance_interval_days;
+        else document.getElementById('rebalance_interval_days').value = '';
+        document.getElementById('start_date').value = cfg.start_date || '';
+        document.getElementById('end_date').value = cfg.end_date || '';
+        if (cfg.max_tilt !== undefined) document.getElementById('max_tilt').value = cfg.max_tilt;
+        if (cfg.strategy_b_base_nasdaq100_weight !== undefined) document.getElementById('strategy_b_base_nasdaq100_weight').value = cfg.strategy_b_base_nasdaq100_weight;
+        if (cfg.strategy_b_base_us3m_weight !== undefined) document.getElementById('strategy_b_base_us3m_weight').value = cfg.strategy_b_base_us3m_weight;
+
+        if (cfg.use_trend_model !== undefined) {
+           document.getElementById('use_trend_model').checked = cfg.use_trend_model;
+           updateTrendModelEnabled();
+        }
+        if (cfg.trend_model_type) document.getElementById('model_type').value = cfg.trend_model_type;
+        const modelLookbackTradingDays = cfg.model_lookback_trading_days ?? cfg.model_lookback_days;
+        if (modelLookbackTradingDays !== undefined && modelLookbackTradingDays !== null) {
+          document.getElementById('model_lookback_trading_days').value = modelLookbackTradingDays;
+        }
+        if (cfg.model_threshold !== undefined) document.getElementById('model_threshold').value = cfg.model_threshold;
+        updateModelPathEnabled();
+        if (cfg.trend_model_type) {
+          await loadTrendModels(cfg.trend_model_type, cfg.model_path || '');
+        }
+
+        if (cfg.top_k !== undefined) document.getElementById('top_k').value = cfg.top_k;
+        if (cfg.target_volatility !== undefined) document.getElementById('target_volatility').value = cfg.target_volatility;
+        if (cfg.vol_lookback !== undefined) document.getElementById('vol_lookback').value = cfg.vol_lookback;
+        if (cfg.max_leverage !== undefined) document.getElementById('max_leverage').value = cfg.max_leverage;
+        if (cfg.max_asset_weight !== undefined) document.getElementById('max_asset_weight').value = cfg.max_asset_weight;
+        if (cfg.vol_scale_lookback !== undefined) document.getElementById('vol_scale_lookback').value = cfg.vol_scale_lookback;
+        if (cfg.momentum_threshold !== undefined) document.getElementById('momentum_threshold').value = cfg.momentum_threshold;
+        if (cfg.use_sharpe_weighting !== undefined) document.getElementById('use_sharpe_weighting').checked = cfg.use_sharpe_weighting;
+        if (cfg.fill_residual_with_safe !== undefined) document.getElementById('fill_residual_with_safe').checked = cfg.fill_residual_with_safe;
+        if (cfg.use_regime_position_sizing !== undefined) document.getElementById('use_regime_position_sizing').checked = cfg.use_regime_position_sizing;
+        document.getElementById('use_regime_asset_pools').checked = useRegimeAssetPools;
+        updateRegimeAssetPoolMode();
+
+        // Restore Assets to Dropzones
+        const stratZone = document.getElementById('strategy-dropzone');
+        const benchZone = document.getElementById('benchmark-dropzone');
+        const safeZone = document.getElementById('safe-dropzone');
+        stratZone.innerHTML = '';
+        benchZone.innerHTML = '';
+        safeZone.innerHTML = '';
+        clearRegimeZones();
+        
+        const ensureChips = (arr, zone, type) => {
+           if(Array.isArray(arr)) {
+               arr.forEach(name => {
+                   if (allAssetsList.find(a => a.name === name) && !zone.querySelector(`[data-name="${name}"]`)) {
+                       zone.appendChild(createAssetChip(name, type));
+                   }
+               });
+           }
+        };
+
+        ensureChips(cfg.candidate_assets, stratZone, 'strategy');
+        ensureChips(cfg.benchmark_cols, benchZone, 'benchmark');
+        ensureChips(cfg.safe_assets, safeZone, 'safe');
+        populateRegimeZones(loadedRegimeCandidateAssets, loadedRegimeSafeAssets);
+
+        renderCandidateWeightEditor(cfg.candidate_asset_weights || null);
+        updateHiddenInputs();
+        refreshPositionSizingSummary();
+        refreshTrendModelSummary();
+        updateStrategyBBaseWeightsVisibility();
+
+        alert('Configuration loaded successfully.');
+      } catch (e) {
+        alert('Failed to load configuration: ' + e.message);
+      }
+    }
+
+    async function handleSaveConfig() {
+      if (!lastBacktestPayload) return;
+      const btn = document.getElementById('save-config-btn');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const res = await fetch('/api/configs/best', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lastBacktestPayload),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert('Configuration saved: ' + data.filename);
+          loadSavedConfigs();
+        } else {
+          alert('Failed to save: ' + formatApiError(data.detail));
+        }
+      } catch (e) {
+        alert('Failed to save configuration.');
+      } finally {
+        btn.textContent = 'Save Config';
+        btn.disabled = false;
+      }
     }
 
     function createAssetChip(name, type = 'pool') {
@@ -301,33 +1692,60 @@
     function updateAssetPool() {
       const pool = document.getElementById('asset-pool');
       pool.innerHTML = '';
-      allAssetsList.forEach(asset => {
-        pool.appendChild(createAssetChip(asset.name, 'pool'));
-      });
+      // 只展示已 Process Data 进入 aligned_assets.csv 的资产，避免未处理资产被误用于回测/benchmarks
+      allAssetsList
+        .filter(asset => asset.processed)
+        .forEach(asset => {
+          pool.appendChild(createAssetChip(asset.name, 'pool'));
+        });
+
+      if (pool.children.length === 0) {
+        const hint = document.createElement('div');
+        hint.className = 'text-xs text-gray-500';
+        hint.textContent = 'No processed assets in Asset Pool. Please click "Process Data" in Assets Management.';
+        pool.appendChild(hint);
+      }
     }
 
     function updateHiddenInputs() {
       const stratChips = Array.from(document.querySelectorAll('#strategy-dropzone .asset-chip'));
-      document.getElementById('asset_cols').value = stratChips.map(c => c.dataset.name).join(',');
+      document.getElementById('candidate_assets').value = stratChips.map(c => c.dataset.name).join(',');
 
       const benchChips = Array.from(document.querySelectorAll('#benchmark-dropzone .asset-chip'));
       document.getElementById('benchmark_cols').value = benchChips.map(c => c.dataset.name).join(',');
 
+      const safeChips = Array.from(document.querySelectorAll('#safe-dropzone .asset-chip'));
+      document.getElementById('safe_assets').value = safeChips.map(c => c.dataset.name).join(',');
+
+      loadedRegimeCandidateAssets = buildRegimeMapFromZones('candidate');
+      loadedRegimeSafeAssets = buildRegimeMapFromZones('safe');
+      renderCandidateWeightEditor();
+      loadedCandidateAssetWeights = collectCandidateAssetWeights();
+      syncCandidateWeightHiddenInput();
+
       const state = {
         strategy: stratChips.map(c => c.dataset.name),
         benchmarks: benchChips.map(c => c.dataset.name),
+        safe_assets: safeChips.map(c => c.dataset.name),
+        regime_mode: document.getElementById('use_regime_asset_pools').checked,
+        regime_candidate_assets: loadedRegimeCandidateAssets,
+        regime_safe_assets: loadedRegimeSafeAssets,
+        candidate_asset_weights: loadedCandidateAssetWeights,
       };
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch (e) {
         console.warn('Failed to persist asset selection', e);
       }
+      refreshPositionSizingSummary();
     }
 
     function clearStrategyAndBenchmarks() {
-      if (!confirm('Clear all Strategy Assets and Benchmarks?')) return;
+      if (!confirm('Clear Candidate / Benchmarks / Safe selections?')) return;
       document.getElementById('strategy-dropzone').innerHTML = '';
       document.getElementById('benchmark-dropzone').innerHTML = '';
+      document.getElementById('safe-dropzone').innerHTML = '';
+      clearRegimeZones();
       updateHiddenInputs();
     }
 
@@ -338,6 +1756,37 @@
       inputs.forEach(el => el.disabled = !enabled);
       fields.style.opacity = enabled ? '1' : '0.4';
       fields.style.pointerEvents = enabled ? 'auto' : 'none';
+      refreshTrendModelSummary();
+    }
+
+    function updateModelPathEnabled() {
+      const modelType = document.getElementById('model_type').value;
+      const modelPathSelect = document.getElementById('model_path');
+      if (!modelPathSelect) return;
+
+      if (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp' || modelType === 'window_transformer' || modelType === 'torch_regression' || modelType === 'regime_horizon_router' || modelType === 'bottom_signal_overlay') {
+        modelPathSelect.disabled = false;
+        loadTrendModels(modelType, modelPathSelect.value || '');
+      } else {
+        modelPathSelect.disabled = true;
+        modelPathSelect.value = '';
+        populateTrendModelOptions([], '');
+        refreshTrendModelSummary();
+      }
+    }
+
+    function updateReleaseLagEnabled() {
+      const ruleEl = document.getElementById('asset_release_rule');
+      const lagEl = document.getElementById('asset_release_lag_days');
+      if (!ruleEl || !lagEl) return;
+
+      const needsLag = ruleEl.value === 'calendar_lag';
+      lagEl.disabled = !needsLag;
+      if (!needsLag && lagEl.value === '') {
+        lagEl.placeholder = 'Only for calendar_lag';
+      } else if (needsLag) {
+        lagEl.placeholder = 'e.g. 35';
+      }
     }
 
     // Setup Drag and Drop
@@ -364,9 +1813,195 @@
       });
 
       document.getElementById('clear-selection-btn').onclick = clearStrategyAndBenchmarks;
-      document.getElementById('use_trend_model').onchange = updateTrendModelEnabled;
+      document.getElementById('use_trend_model').onchange = () => {
+        updateTrendModelEnabled();
+        updateModelPathEnabled();
+      };
+      document.getElementById('model_type').onchange = updateModelPathEnabled;
+      document.getElementById('model_path').onchange = refreshTrendModelSummary;
+      document.getElementById('end_date').onchange = refreshTrendModelSummary;
+      ['top_k','target_volatility','vol_lookback','max_leverage','max_asset_weight','vol_scale_lookback','momentum_threshold'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.oninput = refreshPositionSizingSummary;
+      });
+      document.getElementById('use_sharpe_weighting').onchange = refreshPositionSizingSummary;
+      document.getElementById('fill_residual_with_safe').onchange = refreshPositionSizingSummary;
+      document.getElementById('use_regime_position_sizing').onchange = refreshPositionSizingSummary;
+      document.getElementById('use_regime_asset_pools').onchange = () => {
+        updateRegimeAssetPoolMode();
+        updateHiddenInputs();
+      };
+      document.getElementById('reset-candidate-weights-btn').onclick = resetCandidateWeightsEqual;
+      document.getElementById('asset_release_rule').onchange = updateReleaseLagEnabled;
+
       updateTrendModelEnabled();
+      updateModelPathEnabled();
+      updateReleaseLagEnabled();
+      updateRegimeAssetPoolMode();
+      refreshPositionSizingSummary();
+      refreshTrendModelSummary();
+
+      // ── Split-button: download source selector ─────────────────────────
+      const toggleBtn = document.getElementById('download-source-toggle');
+      const menu = document.getElementById('download-source-menu');
+
+      // Initialise with 'auto' selected
+      toggleBtn.dataset.selected = 'auto';
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.toggle('hidden');
+      });
+
+      document.querySelectorAll('.dl-source-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+          const src = opt.dataset.source;
+          toggleBtn.dataset.selected = src;
+          const labelMap = { auto: 'Auto', yahoo: 'Yahoo', akshare: 'AkShare', baostock: 'Baostock', eastmoney: 'Eastmoney', fred: 'FRED' };
+          document.getElementById('download-source-label').textContent = labelMap[src] || src;
+          menu.classList.add('hidden');
+        });
+      });
+
+      // Close menu when clicking outside
+      document.addEventListener('click', (e) => {
+        if (!document.getElementById('download-split-container').contains(e.target)) {
+          menu.classList.add('hidden');
+        }
+      });
+
+    }); // end DOMContentLoaded
+
+    // ── Table sort: click column header to sort ─────────────────────────────
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('#assets-table th[data-sort-key]').forEach(th => {
+        th.addEventListener('click', () => {
+          const key = th.dataset.sortKey;
+          if (_tableSortKey === key) {
+            _tableSortAsc = !_tableSortAsc;
+          } else {
+            _tableSortKey = key;
+            _tableSortAsc = true;
+          }
+          // Update visual indicators
+          document.querySelectorAll('#assets-table th[data-sort-key]').forEach(h => {
+            h.classList.remove('sort-active');
+            h.querySelector('.sort-indicator').textContent = '⇕';
+          });
+          th.classList.add('sort-active');
+          th.querySelector('.sort-indicator').textContent = _tableSortAsc ? '▲' : '▼';
+          renderAssetsTable(allAssetsList);
+        });
+      });
     });
+
+    /** Render the assets tbody with optional sorting applied.
+     * @param {Array} assets - Full list of asset objects from the API.
+     */
+    function renderAssetsTable(assets) {
+      const tbody = document.querySelector('#assets-table tbody');
+      tbody.innerHTML = '';
+      const frequencyLabelMap = {
+        d: 'Daily',
+        w: 'Weekly',
+        m: 'Monthly',
+        q: 'Quarterly',
+        a: 'Annual',
+      };
+      const DL_BADGE = {
+        yahoo:    { color: 'bg-blue-600',   label: 'Yahoo' },
+        akshare:  { color: 'bg-yellow-600', label: 'AkShare' },
+        baostock: { color: 'bg-purple-600', label: 'Baostock' },
+        eastmoney:{ color: 'bg-cyan-600',   label: 'Eastmoney' },
+        fred:     { color: 'bg-red-600',    label: 'FRED' },
+      };
+
+      // Apply sort if a sort key is active
+      let ordered = [...assets];
+      if (_tableSortKey) {
+        ordered.sort((a, b) => {
+          let va = a[_tableSortKey] ?? '';
+          let vb = b[_tableSortKey] ?? '';
+          // Treat null/undefined as empty string for text, or -Infinity for numbers
+          if (typeof va === 'number' && typeof vb === 'number') {
+            return _tableSortAsc ? va - vb : vb - va;
+          }
+          va = String(va).toLowerCase();
+          vb = String(vb).toLowerCase();
+          if (va < vb) return _tableSortAsc ? -1 : 1;
+          if (va > vb) return _tableSortAsc ? 1 : -1;
+          return 0;
+        });
+      }
+
+      ordered.forEach(a => {
+        const tr = document.createElement('tr');
+        const isDerived = !!a.derived;
+        const normalizedFreq = (a.frequency || '').toLowerCase();
+        const freqLabel = frequencyLabelMap[normalizedFreq] || (a.frequency || '-');
+        const releaseRule = a.release_rule || '-';
+        const releaseLagDays = (a.release_lag_days === 0 || a.release_lag_days) ? a.release_lag_days : '-';
+        const dlKey = (a.downloader || '').toLowerCase();
+        const dlInfo = DL_BADGE[dlKey] || { color: 'bg-gray-600', label: dlKey || 'Auto' };
+        const dlBadge = `<span class="${dlInfo.color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded">${dlInfo.label}</span>`;
+        tr.innerHTML = `
+          <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}" ${isDerived ? 'disabled title="Derived asset: no raw download/process selection"' : ''}></td>
+          <td>
+            ${a.description ? `<div class="table-tooltip-container">${a.name}<div class="table-tooltip">${a.description}</div></div>` : a.name}
+          </td>
+          <td>${a.ticker}</td>
+          <td>${dlBadge}</td>
+          <td>${a.kind}</td>
+          <td>${freqLabel}</td>
+          <td>${releaseRule}</td>
+          <td>${releaseLagDays}</td>
+          <td>${a.engine || '-'}</td>
+          <td>${a.data_start_date || '-'}</td>
+          <td>${a.data_end_date || '-'}</td>
+          <td class="flex gap-1">
+            ${isDerived
+              ? "<span class='text-[10px] text-gray-400 px-2 py-1'>DERIVED</span>"
+              : "<button type='button' class='edit-asset bg-gray-700 hover:bg-gray-600 px-2 py-1 text-[10px]'>EDIT</button><button type='button' class='delete-asset bg-red-900 hover:bg-red-800 px-2 py-1 text-[10px]'>DEL</button>"
+            }
+          </td>
+        `;
+
+        if (!isDerived) {
+          tr.querySelector('.edit-asset').onclick = () => {
+            document.getElementById('asset_original_name').value = a.name;
+            document.getElementById('asset_name').value = a.name;
+            document.getElementById('asset_ticker').value = a.ticker;
+            document.getElementById('asset_kind').value = a.kind;
+            document.getElementById('asset_frequency').value = (a.frequency || 'd').toLowerCase();
+            document.getElementById('asset_release_rule').value = a.release_rule || '';
+            document.getElementById('asset_release_lag_days').value =
+              (a.release_lag_days === 0 || a.release_lag_days)
+                ? String(a.release_lag_days)
+                : '';
+            document.getElementById('asset_engine').value = a.engine || '';
+            document.getElementById('asset_duration').value = a.duration || '';
+            document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
+            document.getElementById('asset_downloader').value = (a.downloader || '').toLowerCase();
+            updateReleaseLagEnabled();
+          };
+
+          tr.querySelector('.delete-asset').onclick = async () => {
+            if (!confirm(`Delete asset '${a.name}'?`)) return;
+            const res = await fetch(`/api/assets/${encodeURIComponent(a.name)}`, { method: 'DELETE' });
+            if (res.ok) loadAssets(); else alert('Delete failed');
+          };
+        }
+
+        tbody.appendChild(tr);
+      });
+
+      if (lastSavedAssetName) {
+        const checkbox = document.querySelector(`.asset-select-checkbox[data-name="${lastSavedAssetName}"]`);
+        if (checkbox) checkbox.checked = true;
+      }
+      // Sync panel heights after table renders
+      requestAnimationFrame(syncPanelHeights);
+    }
 
     async function loadAssets() {
       try {
@@ -375,47 +2010,7 @@
         allAssetsList = assets;
         updateAssetPool();
 
-        const tbody = document.querySelector('#assets-table tbody');
-        tbody.innerHTML = '';
-        assets.forEach(a => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `
-            <td style="text-align:center;"><input type='checkbox' class='asset-select-checkbox' data-name="${a.name}"></td>
-            <td>${a.name}</td>
-            <td>${a.ticker}</td>
-            <td>${a.kind}</td>
-            <td>${a.engine || '-'}</td>
-            <td>${a.data_start_date || '-'}</td>
-            <td>${a.data_end_date || '-'}</td>
-            <td class="flex gap-1">
-              <button type='button' class='edit-asset bg-gray-700 hover:bg-gray-600 px-2 py-1 text-[10px]'>EDIT</button>
-              <button type='button' class='delete-asset bg-red-900 hover:bg-red-800 px-2 py-1 text-[10px]'>DEL</button>
-            </td>
-          `;
-
-          tr.querySelector('.edit-asset').onclick = () => {
-            document.getElementById('asset_original_name').value = a.name;
-            document.getElementById('asset_name').value = a.name;
-            document.getElementById('asset_ticker').value = a.ticker;
-            document.getElementById('asset_kind').value = a.kind;
-            document.getElementById('asset_engine').value = a.engine || '';
-            document.getElementById('asset_duration').value = a.duration || '';
-            document.getElementById('asset_initial_start_date').value = a.initial_start_date || '1985-01-02';
-          };
-
-          tr.querySelector('.delete-asset').onclick = async () => {
-            if (!confirm(`Delete asset '${a.name}'?`)) return;
-            const res = await fetch(`/api/assets/${encodeURIComponent(a.name)}`, { method: 'DELETE' });
-            if (res.ok) loadAssets(); else alert('Delete failed');
-          };
-
-          tbody.appendChild(tr);
-        });
-
-        if (lastSavedAssetName) {
-          const checkbox = document.querySelector(`.asset-select-checkbox[data-name="${lastSavedAssetName}"]`);
-          if (checkbox) checkbox.checked = true;
-        }
+        renderAssetsTable(allAssetsList);
 
         try {
           const saved = localStorage.getItem(STORAGE_KEY);
@@ -423,21 +2018,46 @@
             const state = JSON.parse(saved);
             const stratZone = document.getElementById('strategy-dropzone');
             const benchZone = document.getElementById('benchmark-dropzone');
+            const safeZone = document.getElementById('safe-dropzone');
+            const regimeMode = Boolean(state.regime_mode);
+
+            // 清空现有 chip，避免多次 loadAssets 叠加重复
+            stratZone.innerHTML = '';
+            benchZone.innerHTML = '';
+            safeZone.innerHTML = '';
+            clearRegimeZones();
+            document.getElementById('use_regime_asset_pools').checked = regimeMode;
+            loadedCandidateAssetWeights = state.candidate_asset_weights || null;
+            updateRegimeAssetPoolMode();
 
             if (state.strategy && Array.isArray(state.strategy)) {
               state.strategy.forEach(name => {
                 if (allAssetsList.find(a => a.name === name)) {
-                  stratZone.appendChild(createAssetChip(name, 'strategy'));
+                  if (!stratZone.querySelector(`[data-name="${name}"]`)) {
+                    stratZone.appendChild(createAssetChip(name, 'strategy'));
+                  }
                 }
               });
             }
             if (state.benchmarks && Array.isArray(state.benchmarks)) {
               state.benchmarks.forEach(name => {
                 if (allAssetsList.find(a => a.name === name)) {
-                  benchZone.appendChild(createAssetChip(name, 'benchmark'));
+                  if (!benchZone.querySelector(`[data-name="${name}"]`)) {
+                    benchZone.appendChild(createAssetChip(name, 'benchmark'));
+                  }
                 }
               });
             }
+            if (state.safe_assets && Array.isArray(state.safe_assets)) {
+              state.safe_assets.forEach(name => {
+                if (allAssetsList.find(a => a.name === name)) {
+                  if (!safeZone.querySelector(`[data-name="${name}"]`)) {
+                    safeZone.appendChild(createAssetChip(name, 'safe'));
+                  }
+                }
+              });
+            }
+            populateRegimeZones(state.regime_candidate_assets || null, state.regime_safe_assets || null);
             updateHiddenInputs();
           }
         } catch (e) {
@@ -449,13 +2069,18 @@
     async function saveAsset(e) {
       e.preventDefault();
       const originalName = document.getElementById('asset_original_name').value || null;
+      const releaseLagRaw = document.getElementById('asset_release_lag_days').value;
       const payload = {
         name: document.getElementById('asset_name').value.trim(),
         ticker: document.getElementById('asset_ticker').value.trim(),
         kind: document.getElementById('asset_kind').value,
+        frequency: document.getElementById('asset_frequency').value || null,
+        release_rule: document.getElementById('asset_release_rule').value || null,
+        release_lag_days: releaseLagRaw === '' ? null : parseInt(releaseLagRaw, 10),
         engine: document.getElementById('asset_engine').value || null,
         duration: document.getElementById('asset_duration').value ? parseFloat(document.getElementById('asset_duration').value) : null,
-        initial_start_date: document.getElementById('asset_initial_start_date').value || "1985-01-02"
+        initial_start_date: document.getElementById('asset_initial_start_date').value || "1985-01-02",
+        downloader: document.getElementById('asset_downloader').value || null,
       };
 
       if (!payload.name || !payload.ticker) { alert('Name and Ticker are required'); return; }
@@ -475,7 +2100,7 @@
         loadAssets();
       } else {
         const err = await res.json();
-        alert(err.detail || 'Save failed');
+        alert(formatApiError(err.detail || 'Save failed'));
       }
     }
 
@@ -488,56 +2113,42 @@
         return;
       }
 
-      if (!confirm('Start incremental data update for selected assets?')) return;
+      // Read current downloader selection from split-button
+      const currentSource = document.getElementById('download-source-toggle').dataset.selected || 'auto';
+      const sourceLabel = currentSource === 'auto' ? 'Auto (Smart)' : currentSource.charAt(0).toUpperCase() + currentSource.slice(1);
+
+      if (!confirm(`Start incremental data update for selected assets using [${sourceLabel}]?`)) return;
       const btn = document.getElementById('download-assets-btn');
       const originalText = btn.textContent;
       btn.disabled = true;
+      document.getElementById('download-source-toggle').disabled = true;
       btn.textContent = 'Updating...';
-      
+
       try {
-        const res = await fetch('/api/assets/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ names: selectedNames }),
-        });
-        const data = await res.json();
-        if (res.status === 429) {
-            alert(data.detail);
-        } else if (!res.ok) {
-            alert('Failed: ' + (data.detail || 'Unknown error'));
-        } else {
-            alert('Success: Data downloaded.');
-            loadAssets();
-        }
-      } catch (e) { alert('Download trigger failed'); }
+        await triggerSelectedAssetDownload(selectedNames);
+        alert('Success: Data downloaded.');
+        loadAssets();
+      } catch (e) { alert('Download trigger failed: ' + formatApiError(e.message || e)); }
       finally {
         btn.disabled = false;
+        document.getElementById('download-source-toggle').disabled = false;
         btn.textContent = originalText;
       }
     }
 
     async function processAssets() {
-      if (!confirm('Start processing and aligning data for ALL configured assets?')) return;
+      if (!confirm('Start processing and aligning data? This will delete the existing aligned_assets.csv and rebuild from ALL downloaded data files.')) return;
       const btn = document.getElementById('process-assets-btn');
       const originalText = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Processing...';
 
       try {
-        const res = await fetch('/api/assets/process', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          alert('Failed: ' + (data.detail || 'Unknown error'));
-        } else {
-          alert('Success: Data processed.');
-          loadAssets();
-        }
+        await triggerFullAssetProcessing();
+        alert('Success: Data processed.');
+        loadAssets();
       } catch (e) {
-        alert('Process trigger failed');
+        alert('Process trigger failed: ' + formatApiError(e.message || e));
       } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -550,43 +2161,170 @@
       const loading = document.getElementById('loading');
       const resultsPanel = document.getElementById('results-panel');
       const errorMsg = document.getElementById('error-msg');
-      const statsGrid = document.getElementById('stats-grid');
-      const plotFrame = document.getElementById('plot-frame');
+      const strategyDiagnosticsGrid = document.getElementById('strategy-diagnostics-grid');
+      const futureForecastGrid = document.getElementById('future-forecast-grid');
+      const resultsTabs = document.getElementById('results-tabs');
+      const resultsTabsPanel = document.getElementById('results-tabs-panel');
 
       errorMsg.style.display = 'none';
       resultsPanel.classList.add('hidden');
       runBtn.disabled = true;
       loading.classList.remove('hidden');
+      if (strategyDiagnosticsGrid) strategyDiagnosticsGrid.innerHTML = '';
+      if (futureForecastGrid) futureForecastGrid.innerHTML = '';
+      if (resultsTabs) resultsTabs.innerHTML = '';
+      if (resultsTabsPanel) resultsTabsPanel.classList.add('hidden');
+
+      const useStrategyCandidates = document.getElementById('use_strategy_candidates').checked;
+      const selectedStrategyAlgorithms = useStrategyCandidates
+        ? getSelectedStrategyCandidateAlgorithms()
+        : [];
+
+      if (useStrategyCandidates && selectedStrategyAlgorithms.length === 0) {
+        loading.classList.add('hidden');
+        runBtn.disabled = false;
+        errorMsg.textContent = 'Please enable at least one strategy candidate.';
+        errorMsg.style.display = 'block';
+        return;
+      }
+
+      const useTrend = document.getElementById('use_trend_model').checked;
+      const modelType = document.getElementById('model_type').value;
+      const modelPathEl = document.getElementById('model_path');
+      const modelPathVal = modelPathEl && modelPathEl.value ? modelPathEl.value : '';
+
+      if (useTrend && (modelType === 'kmeans_window' || modelType === 'random_forest' || modelType === 'torch_mlp' || modelType === 'window_transformer' || modelType === 'torch_regression' || modelType === 'regime_horizon_router') && !modelPathVal) {
+        loading.classList.add('hidden');
+        runBtn.disabled = false;
+        errorMsg.textContent = 'Please select a Model Artifact when using ' + modelType + '.';
+        errorMsg.style.display = 'block';
+        return;
+      }
+
+      const selectedAssetCols = document.getElementById('candidate_assets').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      const selectedBenchmarkCols = document.getElementById('benchmark_cols').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      const selectedSafeCols = document.getElementById('safe_assets').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      const useRegimeAssetPools = document.getElementById('use_regime_asset_pools').checked;
+      const regimeCandidateAssets = buildRegimeMapFromZones('candidate');
+      const regimeSafeAssets = buildRegimeMapFromZones('safe');
+      const selectedRegimeCols = [];
+      if (useRegimeAssetPools) {
+        REGIME_ORDER.forEach(regime => {
+          selectedRegimeCols.push(...((regimeCandidateAssets || {})[regime] || []));
+          selectedRegimeCols.push(...((regimeSafeAssets || {})[regime] || []));
+        });
+      }
+
+      const requiredAssets = collectBacktestRequiredAssets({
+        useStrategyCandidates,
+        selectedStrategyAlgorithms,
+        useRegimeAssetPools,
+        selectedAssetCols,
+        selectedBenchmarkCols,
+        selectedSafeCols,
+        selectedRegimeCols,
+      });
+
+      if (useStrategyCandidates && requiredAssets.length > 0) {
+        try {
+          await triggerSelectedAssetDownload(requiredAssets);
+          await triggerFullAssetProcessing();
+          await syncEndDateToLatestSharedCoverage(requiredAssets);
+        } catch (err) {
+          loading.classList.add('hidden');
+          runBtn.disabled = false;
+          errorMsg.textContent = formatApiError(err.message || err);
+          errorMsg.style.display = 'block';
+          return;
+        }
+      }
+      
+      // 校验：不允许选择未 Process Data 的资产参与回测/基准/防御
+      const selectedAll = requiredAssets;
+      const notProcessed = selectedAll
+        .filter(n => n)
+        .filter((n, idx, arr) => arr.indexOf(n) === idx)
+        .filter(name => {
+          const a = allAssetsList.find(x => x.name === name);
+          return a && !a.processed;
+        });
+
+      if (notProcessed.length > 0) {
+        loading.classList.add('hidden');
+        runBtn.disabled = false;
+        errorMsg.textContent =
+          'Some selected assets are not processed yet: ' +
+          notProcessed.join(', ') +
+          '. Please click "Process Data" in Assets Management first.';
+        errorMsg.style.display = 'block';
+        return;
+      }
 
       const payload = {
-        algorithm: document.getElementById('algorithm').value,
+        algorithm: useStrategyCandidates ? selectedStrategyAlgorithms[0] : document.getElementById('algorithm').value,
+        strategy_selector_enabled: useStrategyCandidates,
+        selected_algorithms: useStrategyCandidates ? selectedStrategyAlgorithms : null,
         start_date: document.getElementById('start_date').value || null,
         end_date: document.getElementById('end_date').value || null,
         initial_capital: parseFloat(document.getElementById('initial_capital').value),
-        asset_cols: document.getElementById('asset_cols').value
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean),
-        benchmark_cols: document.getElementById('benchmark_cols').value
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean),
+        candidate_assets: useRegimeAssetPools ? null : (selectedAssetCols.length > 0 ? selectedAssetCols : null),
+        candidate_asset_weights: useRegimeAssetPools ? null : collectCandidateAssetWeights(),
+        benchmark_cols: selectedBenchmarkCols,
+        safe_assets: useRegimeAssetPools ? [] : (selectedSafeCols.length > 0 ? selectedSafeCols : ["20Y_Treasury_ETF", "GoldIndex", "US3M"]),
         rebalance_interval_days: document.getElementById('rebalance_interval_days').value
           ? parseInt(document.getElementById('rebalance_interval_days').value)
           : null,
-        use_trend_model: document.getElementById('use_trend_model').checked,
-        model_type: document.getElementById('model_type').value,
-        model_lookback_days: document.getElementById('model_lookback_days').value
-          ? parseInt(document.getElementById('model_lookback_days').value)
+        use_trend_model: useTrend,
+        trend_model_type: modelType,
+        model_lookback_trading_days: document.getElementById('model_lookback_trading_days').value
+          ? parseInt(document.getElementById('model_lookback_trading_days').value)
           : 60,
         model_threshold: document.getElementById('model_threshold').value
           ? parseFloat(document.getElementById('model_threshold').value)
           : 0.5,
+        model_path: modelPathVal || null,
+        top_k: document.getElementById('top_k').value
+          ? parseInt(document.getElementById('top_k').value)
+          : 3,
+        target_volatility: document.getElementById('target_volatility').value
+          ? parseFloat(document.getElementById('target_volatility').value)
+          : 0.10,
+        vol_lookback: document.getElementById('vol_lookback').value
+          ? parseInt(document.getElementById('vol_lookback').value)
+          : 60,
+        max_leverage: document.getElementById('max_leverage').value
+          ? parseFloat(document.getElementById('max_leverage').value)
+          : 1.0,
+        max_asset_weight: document.getElementById('max_asset_weight').value
+          ? parseFloat(document.getElementById('max_asset_weight').value)
+          : 1.0,
+        strategy_b_base_nasdaq100_weight: document.getElementById('strategy_b_base_nasdaq100_weight').value
+          ? parseFloat(document.getElementById('strategy_b_base_nasdaq100_weight').value)
+          : 0.80,
+        strategy_b_base_us3m_weight: document.getElementById('strategy_b_base_us3m_weight').value
+          ? parseFloat(document.getElementById('strategy_b_base_us3m_weight').value)
+          : 0.20,
+        vol_scale_lookback: document.getElementById('vol_scale_lookback').value
+          ? parseInt(document.getElementById('vol_scale_lookback').value)
+          : 0,
+        momentum_threshold: document.getElementById('momentum_threshold').value
+          ? parseFloat(document.getElementById('momentum_threshold').value)
+          : 0.0,
+        use_sharpe_weighting: document.getElementById('use_sharpe_weighting').checked,
+        fill_residual_with_safe: document.getElementById('fill_residual_with_safe').checked,
+        use_regime_position_sizing: useRegimeAssetPools ? true : document.getElementById('use_regime_position_sizing').checked,
+        regime_candidate_assets: useRegimeAssetPools ? regimeCandidateAssets : null,
+        regime_safe_assets: useRegimeAssetPools ? regimeSafeAssets : null,
       };
-
-      if (payload.asset_cols.length === 0) {
-        payload.asset_cols = null;
-      }
 
       try {
         const res = await fetch('/api/backtest', {
@@ -597,31 +2335,23 @@
 
         if (!res.ok) {
           const err = await res.json();
-          throw new Error(err.detail || 'Backtest failed');
+          throw new Error(formatApiError(err.detail || 'Backtest failed'));
         }
 
         const data = await res.json();
-        const s = data.stats;
-        const metrics = [
-          { label: 'Total Return', value: (s['Total Return'] * 100).toFixed(2) + '%' },
-          { label: 'CAGR', value: (s['CAGR'] * 100).toFixed(2) + '%' },
-          { label: 'Sharpe Ratio', value: s['Sharpe Ratio'].toFixed(2) },
-          { label: 'Max Drawdown', value: (s['Max Drawdown'] * 100).toFixed(2) + '%' },
-          { label: 'Volatility', value: (s['Volatility'] * 100).toFixed(2) + '%' },
-          { label: 'Years', value: s['Years'].toFixed(1) },
-        ];
-
-        statsGrid.innerHTML = '';
-        metrics.forEach(m => {
-          const card = document.createElement('div');
-          card.className = 'stat-card';
-          card.innerHTML = `<div class='stat-label'>${m.label}</div><div class='stat-value'>${m.value}</div>`;
-          statsGrid.appendChild(card);
-        });
-
-        plotFrame.src = data.result_url + '?t=' + new Date().getTime();
+        currentBatchResults = Array.isArray(data.results) ? data.results : [];
+        if (!currentBatchResults.length) {
+          throw new Error('Backtest returned no results');
+        }
+        currentResultIndex = 0;
+        renderResultTabs(currentBatchResults);
+        renderSingleBacktestResult(currentBatchResults[currentResultIndex]);
         resultsPanel.classList.remove('hidden');
         resultsPanel.scrollIntoView({ behavior: 'smooth' });
+
+        // Save last payload and enable save button
+        lastBacktestPayload = payload;
+        document.getElementById('save-config-btn').disabled = false;
       } catch (err) {
         errorMsg.textContent = err.message;
         errorMsg.style.display = 'block';
@@ -649,13 +2379,50 @@
       document.getElementById('asset_name').value = '';
       document.getElementById('asset_ticker').value = '';
       document.getElementById('asset_kind').value = 'price';
+      document.getElementById('asset_frequency').value = 'd';
+      document.getElementById('asset_release_rule').value = '';
+      document.getElementById('asset_release_lag_days').value = '';
       document.getElementById('asset_engine').value = '';
       document.getElementById('asset_duration').value = '';
       document.getElementById('asset_initial_start_date').value = '1985-01-02';
+      updateReleaseLagEnabled();
     };
+
+    document.getElementById('load-config-btn').onclick = handleLoadConfig;
+    document.getElementById('save-config-btn').onclick = handleSaveConfig;
+    document.getElementById('use_strategy_candidates').addEventListener('change', updateStrategyCandidateMode);
+    document.getElementById('algorithm').addEventListener('change', updateStrategyBBaseWeightsVisibility);
+    document.getElementById('algorithm').addEventListener('change', updateCandidateWeightsVisibility);
+    document.querySelectorAll('.strategy-candidate-toggle').forEach(input => {
+      input.addEventListener('change', () => {
+        syncStrategyCandidateOptionStyles();
+        updateStrategyBBaseWeightsVisibility();
+      });
+    });
 
     loadAlgorithms();
     loadAssets();
+    loadSavedConfigs();
+    updateStrategyCandidateMode();
+    updateStrategyBBaseWeightsVisibility();
+    updateCandidateWeightsVisibility();
+
+    // Sync Assets Management panel height to match Configuration panel height
+    function syncPanelHeights() {
+      const configPanel = document.getElementById('config-panel');
+      const assetsPanel = document.getElementById('assets-panel');
+      if (!configPanel || !assetsPanel) return;
+      if (window.innerWidth >= 1024) {
+        const h = configPanel.offsetHeight;
+        assetsPanel.style.height = h + 'px';
+      } else {
+        assetsPanel.style.height = '';
+      }
+    }
+
+    window.addEventListener('resize', syncPanelHeights);
+    // Initial sync after full page render
+    requestAnimationFrame(() => requestAnimationFrame(syncPanelHeights));
   </script>
 </body>
 </html>

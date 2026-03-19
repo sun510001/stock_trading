@@ -4,6 +4,7 @@ import os
 from typing import List, Dict, Any, Optional
 from logger import logger
 from data_loader.yahoo_downloader import YahooIncrementalLoader
+from data_loader.fred_downloader import _expand_low_frequency_to_daily_with_ffill
 from utils.naming import sanitize_filename
 
 class DataProcessor:
@@ -46,11 +47,138 @@ class DataProcessor:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Raw data file not found: {path}")
         df = pd.read_csv(path, index_col="Date", parse_dates=True)
+        df = df[df.index.notna()]
         df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
         if "Close" in df.columns:
             return df["Close"]
         return df.iloc[:, 0]
+
+    @staticmethod
+    def _third_thursday_of_month(ts: pd.Timestamp) -> pd.Timestamp:
+        """Compute the third Thursday date for the month of a timestamp.
+
+        Args:
+            ts: Any timestamp within the target month.
+
+        Returns:
+            pd.Timestamp: Calendar date of the third Thursday in the same month.
+        """
+        month_start = pd.Timestamp(year=ts.year, month=ts.month, day=1)
+        thursday_weekday = 3  # Monday=0 ... Sunday=6
+        days_to_first_thu = (thursday_weekday - month_start.weekday()) % 7
+        first_thursday = month_start + pd.Timedelta(days=days_to_first_thu)
+        return first_thursday + pd.Timedelta(days=14)
+
+    @staticmethod
+    def _next_or_same_weekday(
+        idx: pd.DatetimeIndex,
+        weekday: int,
+    ) -> pd.DatetimeIndex:
+        """Shift each timestamp forward to the next occurrence of weekday."""
+        offsets = (weekday - idx.weekday) % 7
+        return idx + pd.to_timedelta(offsets, unit="D")
+
+    @staticmethod
+    def _forward_fill_on_reference_calendar(
+        values: pd.Series,
+        reference_index: pd.DatetimeIndex,
+    ) -> pd.Series:
+        """Align a series to the reference calendar without pre-inception fills."""
+        cleaned = values.copy()
+        cleaned.index = pd.to_datetime(cleaned.index)
+        cleaned = cleaned[cleaned.index.notna()]
+        cleaned = cleaned[~cleaned.index.duplicated(keep="last")].sort_index()
+
+        aligned = cleaned.reindex(reference_index).ffill()
+        first_valid = cleaned.first_valid_index()
+        if first_valid is not None:
+            aligned.loc[aligned.index < pd.Timestamp(first_valid)] = np.nan
+        aligned.name = cleaned.name
+        return aligned
+
+    def _apply_macro_availability_rules(
+        self,
+        name: str,
+        values: pd.Series,
+        asset: Dict[str, Any],
+    ) -> pd.Series:
+        """Align macro observations to realistic market availability timestamps.
+
+        This method addresses release-lag look-ahead risks by remapping each
+        macro observation date to a conservative release date before forward
+        filling to daily frequency.
+
+        Supported rules:
+            - ``none``: keep original observation dates.
+            - ``next_thursday``: move each value to the next Thursday.
+            - ``third_thursday_same_month``: move each value to the third
+              Thursday of its observation month.
+            - ``calendar_lag``: shift by ``release_lag_days`` calendar days.
+
+        Args:
+            name: Macro series display name.
+            values: Raw macro series indexed by observation dates.
+            asset: Asset configuration dictionary from ``assets.json``.
+
+        Returns:
+            pd.Series: Re-indexed series using release-date timestamps.
+        """
+        if values.empty:
+            return values
+
+        cleaned = values.copy()
+        cleaned.index = pd.to_datetime(cleaned.index)
+        cleaned = cleaned[cleaned.index.notna()].sort_index().dropna()
+        if cleaned.empty:
+            return cleaned
+
+        freq = str(asset.get("frequency", "")).strip().lower()
+        release_rule = str(asset.get("release_rule", "")).strip().lower()
+        lag_days_raw = asset.get("release_lag_days", 0)
+
+        if not release_rule:
+            default_rules: Dict[str, Dict[str, Any]] = {
+                "JOBLESS_CLAIMS": {"rule": "next_thursday", "lag_days": 0},
+                "PhillyFed": {"rule": "third_thursday_same_month", "lag_days": 0},
+                "M2_YoY": {"rule": "calendar_lag", "lag_days": 35},
+            }
+            default_cfg = default_rules.get(name, {})
+            release_rule = str(default_cfg.get("rule", "none"))
+            lag_days_raw = default_cfg.get("lag_days", lag_days_raw)
+
+        try:
+            lag_days = int(lag_days_raw)
+        except (TypeError, ValueError):
+            lag_days = 0
+
+        idx = cleaned.index
+        if release_rule == "next_thursday":
+            release_idx = self._next_or_same_weekday(idx, weekday=3)
+        elif release_rule == "next_friday":
+            release_idx = self._next_or_same_weekday(idx, weekday=4)
+        elif release_rule == "third_thursday_same_month":
+            release_idx = pd.DatetimeIndex([self._third_thursday_of_month(ts) for ts in idx])
+        elif release_rule == "calendar_lag":
+            release_idx = idx + pd.to_timedelta(max(0, lag_days), unit="D")
+        else:
+            release_idx = idx
+
+        aligned = pd.Series(cleaned.values, index=release_idx, name=cleaned.name)
+        aligned = aligned[~aligned.index.duplicated(keep="last")].sort_index()
+
+        if name in {"JOBLESS_CLAIMS", "PhillyFed", "M2_YoY"}:
+            logger.warning(
+                f"Macro '{name}' uses release-date alignment rule='{release_rule}' "
+                f"(lag_days={lag_days}). Note: historical revisions are not removed "
+                f"without ALFRED real-time vintages."
+            )
+        else:
+            logger.info(
+                f"Macro '{name}' availability aligned with rule='{release_rule}' "
+                f"(freq={freq}, lag_days={lag_days})."
+            )
+        return aligned
 
     def bond_pricing_engine(self, yield_series: pd.Series, duration: float = 20.0, initial_price: float = 100.0) -> pd.Series:
         y = yield_series / 100.0
@@ -67,18 +195,101 @@ class DataProcessor:
         price_series = initial_price * (1 + daily_ret).cumprod()
         return price_series
 
+    # Preferred reference assets for trading calendar (checked in priority order)
+    _CALENDAR_REFERENCE_PRIORITY: List[str] = [
+        "Nasdaq100", "SP500", "Dow", "Russell2000",
+        "7_10Y_Treasury_ETF", "20Y_Treasury_ETF",
+    ]
+
+    def _build_reference_trading_calendar(
+        self,
+        prices: Dict[str, pd.Series],
+        macro_names: List[str],
+    ) -> Optional[pd.DatetimeIndex]:
+        """Derive a reference trading-day calendar from loaded daily price assets.
+
+        Iterates through a priority list (Nasdaq100 first) and returns the
+        non-NaN index of the first matching asset.  Falls back to the union
+        of all non-macro series if none of the preferred assets are loaded.
+
+        Args:
+            prices: Dict mapping asset name to its price/value Series.
+            macro_names: Names of low-frequency macro series to exclude from
+                calendar derivation.
+
+        Returns:
+            Sorted DatetimeIndex of trading days, or None if no reference
+            series is available.
+        """
+        for preferred in self._CALENDAR_REFERENCE_PRIORITY:
+            if preferred in prices and preferred not in macro_names:
+                idx = prices[preferred].dropna().index
+                if len(idx) > 0:
+                    logger.info(
+                        f"Trading calendar reference: '{preferred}' "
+                        f"({len(idx)} trading days)"
+                    )
+                    return pd.DatetimeIndex(sorted(set(idx)))
+
+        # Fallback: union of all non-macro daily price series
+        non_macro = {k: v for k, v in prices.items() if k not in macro_names}
+        if non_macro:
+            combined_idx: pd.DatetimeIndex = pd.DatetimeIndex([])
+            for s in non_macro.values():
+                combined_idx = combined_idx.union(s.dropna().index)
+            logger.info(
+                f"Trading calendar reference: union of {len(non_macro)} "
+                f"non-macro series ({len(combined_idx)} unique days)"
+            )
+            return combined_idx.sort_values()
+
+        return None
+
     def build_aligned_dataframe(self, assets: List[Dict[str, Any]]) -> pd.DataFrame:
         """Build aligned price matrix for given assets and return as DataFrame.
 
-        全量对齐矩阵中允许存在 NaN；只去掉整行全空的日期。具体的“木桶式裁剪”
+        全量对齐矩阵中允许存在 NaN；只去掉整行全空的日期。具体的"木桶式裁剪"
         会在回测阶段按本次使用的资产子集进行。"""
         logger.info("Starting Multi-Asset Data Processing & Alignment (in-memory)...")
         prices: Dict[str, pd.Series] = {}
+        macro_names: List[str] = []
 
         for asset in assets:
             name = asset["name"]
             kind = asset.get("kind", "price")
             engine = asset.get("engine")
+
+            # ── Macro indicators (source=fred / kind=macro) ───────────────────
+            # Loaded from data/macro/, first expanded to calendar-daily so
+            # weekend release dates are preserved, then re-aligned to the
+            # reference trading calendar below.
+            if kind == "macro" or asset.get("source") == "fred":
+                macro_names.append(name)
+                safe_name = sanitize_filename(name)
+                macro_path = os.path.join(self.raw_path, "macro", f"{safe_name}.csv")
+                if not os.path.exists(macro_path):
+                    logger.warning(f"Macro CSV not found, skipping '{name}': {macro_path}")
+                    continue
+                try:
+                    df_macro = pd.read_csv(macro_path, index_col="Date", parse_dates=True)
+                    df_macro = df_macro[df_macro.index.notna()]
+                    df_macro = df_macro[~df_macro.index.duplicated(keep="last")]
+                    df_macro.sort_index(inplace=True)
+                    raw_series = df_macro.iloc[:, 0]  # first column (typically "Value")
+                    raw_series = self._apply_macro_availability_rules(name, raw_series, asset)
+                    freq = (asset.get("frequency") or "").strip().lower()
+                    if freq in {"w", "m", "q", "a"}:
+                        logger.info(
+                            f"Expanding macro '{name}' ({freq}) to daily via forward-fill..."
+                        )
+                        prices[name] = _expand_low_frequency_to_daily_with_ffill(raw_series)
+                    else:
+                        # Already daily (freq=='d') or unknown — use as-is.
+                        prices[name] = raw_series
+                    logger.info(f"Macro indicator '{name}' added to aligned matrix.")
+                except Exception as exc:
+                    logger.warning(f"Failed to load macro '{name}': {exc}")
+                continue
 
             duration: float = 20.0
             if kind == "yield" and engine == "bond":
@@ -108,7 +319,61 @@ class DataProcessor:
         if not prices:
             raise ValueError("No assets were successfully processed.")
 
+        ref_index = self._build_reference_trading_calendar(prices, macro_names)
+        if ref_index is not None:
+            aligned_prices: Dict[str, pd.Series] = {}
+            for name, series in prices.items():
+                aligned_prices[name] = self._forward_fill_on_reference_calendar(
+                    series,
+                    ref_index,
+                )
+            prices = aligned_prices
+            logger.info(
+                "All assets aligned to the reference trading calendar with "
+                "post-inception forward-fill for market-closure gaps."
+            )
+        else:
+            logger.warning(
+                "No reference trading calendar found; keeping original asset indices "
+                "without unified gap filling."
+            )
+
+        # ── Derived indicator: Net Liquidity ──────────────────────────────────
+        # Net Liquidity = WALCL - WTREGEN - RRPONTSYD
+        # Only computed when all three component series are present and non-empty.
+        _NET_LIQ_COMPONENTS = ("WALCL", "WTREGEN", "RRPONTSYD")
+        if all(k in prices and not prices[k].empty for k in _NET_LIQ_COMPONENTS):
+            walcl = prices["WALCL"]
+            wtregen = prices["WTREGEN"]
+            rrpontsyd = prices["RRPONTSYD"]
+            # Align on the union index before computing to handle any remaining
+            # offset differences between the three series.
+            combined = pd.concat(
+                [walcl.rename("WALCL"), wtregen.rename("WTREGEN"), rrpontsyd.rename("RRPONTSYD")],
+                axis=1,
+            ).ffill()
+            net_liq = combined["WALCL"] - combined["WTREGEN"] - combined["RRPONTSYD"]
+            net_liq.name = "Net_Liquidity"
+            prices["Net_Liquidity"] = net_liq
+            logger.info(
+                "Derived indicator 'Net_Liquidity' created: WALCL - WTREGEN - RRPONTSYD "
+                f"({net_liq.notna().sum()} non-NaN rows)."
+            )
+        else:
+            missing = [k for k in _NET_LIQ_COMPONENTS if k not in prices or prices[k].empty]
+            if missing:
+                logger.info(
+                    f"Net_Liquidity not computed: missing component(s) {missing}."
+                )
+
         portfolio_df = pd.DataFrame(prices)
+        # Ensure the index is a proper DatetimeIndex, monotonically increasing,
+        # and free of duplicates before any further operations.
+        portfolio_df.index = pd.to_datetime(portfolio_df.index)
+        # Drop NaT rows (trailing empty rows from Yahoo downloads)
+        portfolio_df = portfolio_df[portfolio_df.index.notna()]
+        portfolio_df = portfolio_df[~portfolio_df.index.duplicated(keep="last")]
+        portfolio_df.sort_index(inplace=True)
         original_len = len(portfolio_df)
         # 只丢弃整行全为空的日期，保留部分资产缺失的数据，
         # 以便在回测阶段按具体资产子集再做裁剪。
@@ -121,8 +386,16 @@ class DataProcessor:
         )
         return portfolio_df
 
-    def process_and_align(self, assets: List[Dict[str, Any]], output_filename: str = "aligned_assets.csv") -> str:
+    def process_and_align(
+        self,
+        assets: List[Dict[str, Any]],
+        output_filename: str = "aligned_assets.csv",
+    ) -> str:
         """Full ETL pipeline: build aligned DataFrame and persist to CSV.
+
+        TermSpread is no longer auto-derived here — the FRED series T10Y2Y
+        (10Y-2Y spread) is loaded directly as a macro asset and provides a
+        cleaner, official version of the same signal.
 
         Args:
             assets: Asset configuration list.
@@ -134,7 +407,7 @@ class DataProcessor:
         try:
             portfolio_df = self.build_aligned_dataframe(assets)
             output_file = os.path.join(self.processed_path, output_filename)
-            portfolio_df.to_csv(output_file)
+            portfolio_df.to_csv(output_file, index_label="Date")
             logger.info(f"Aligned assets saved successfully to: {output_file}")
             return output_file
         except Exception as e:
