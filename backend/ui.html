@@ -148,6 +148,10 @@
     .forecast-badge.deflation { background:#1e3a8a; color:#93c5fd; }
     .forecast-badge.recession { background:#4c0519; color:#fda4af; }
     .forecast-badge.sideways { background:#374151; color:#d1d5db; }
+    .source-badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:9999px; font-size:11px; font-weight:700; letter-spacing:0.03em; text-transform:uppercase; }
+    .source-badge.historical-router-table { background:#1f2937; color:#cbd5e1; }
+    .source-badge.online-current-fallback { background:#172554; color:#bfdbfe; }
+    .source-badge.default { background:#3f3f46; color:#d4d4d8; }
     .forecast-prob-row { display:flex; align-items:center; gap:10px; margin-top:8px; }
     .forecast-prob-label { width:88px; font-size:12px; color:#d1d5db; text-transform:capitalize; }
     .forecast-prob-track { flex:1; height:8px; border-radius:9999px; background:#262626; overflow:hidden; }
@@ -161,6 +165,8 @@
     .result-tabs { display:flex; flex-wrap:wrap; gap:8px; }
     .result-tab { padding:8px 12px; border:1px solid #374151; border-radius:9999px; background:#181818; color:#d1d5db; font-size:12px; font-weight:700; cursor:pointer; transition:border-color 0.2s, background-color 0.2s, color 0.2s; }
     .result-tab.active { border-color:#2563eb; background:#172554; color:#eff6ff; }
+    .weight-row { display:grid; grid-template-columns:minmax(0,1fr) 110px; gap:8px; align-items:center; }
+    .weight-label { font-size:12px; color:#d1d5db; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   </style>
 </head>
 <body>
@@ -199,6 +205,7 @@
                     </span>
                     <span>Use Strategy Candidates</span>
                   </label>
+                  <div class="text-[11px] text-gray-500 -mt-2">When enabled, Run Backtest will auto-refresh the selected strategy assets, rebuild processed data, and snap End Date to the latest shared local coverage before submission.</div>
 
                   <div id="single-algorithm-section">
                     <label>Algorithm</label>
@@ -242,16 +249,19 @@
                   <input type='number' id='initial_capital' value='100000'>
                 </div>
                 <div>
-                  <label>Rebalance Interval (days)</label>
+                  <label>Rebalance Interval (calendar days)</label>
                   <input type='number' id='rebalance_interval_days' placeholder='e.g. 30'>
+                  <div class="text-[11px] text-gray-500 mt-1">The engine rebalances after at least this many natural days have elapsed since the last executed rebalance.</div>
                 </div>
                 <div>
                   <label>Start Date</label>
                   <input type='date' id='start_date' value='2016-01-01'>
+                  <div class="text-[11px] text-gray-500 mt-1">Actual backtest start is auto-aligned to the first date where the selected tradeable assets all have valid prices.</div>
                 </div>
                 <div>
                   <label>End Date</label>
                   <input type='date' id='end_date' value='2026-01-01'>
+                  <div class="text-[11px] text-gray-500 mt-1">In Strategy Candidates mode, this is auto-updated to the latest common local data date across required assets right before the backtest starts.</div>
                 </div>
                 <div>
                   <label>Max Tilt (0.1 = 10%)</label>
@@ -280,6 +290,18 @@
                     <label class="text-xs text-gray-400">Candidate Assets</label>
                     <div id="strategy-dropzone" class="dropzone" data-type="strategy"></div>
                     <input type='hidden' id='candidate_assets'>
+                  </div>
+
+                  <div id="candidate-weights-panel" class="hidden bg-[#171717] border border-gray-700 rounded-lg p-3 space-y-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <div>
+                        <div class="text-xs text-gray-400">Candidate Weights</div>
+                        <div class="text-[11px] text-gray-500">Used by permanent_portfolio_rebalance only. Values are normalized automatically and can rebalance from the aligned start date without vol lookback warmup.</div>
+                      </div>
+                      <button type="button" id="reset-candidate-weights-btn" class="text-[10px] px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-gray-200 transition-colors">Reset Equal</button>
+                    </div>
+                    <div id="candidate-weights-editor" class="space-y-2"></div>
+                    <input type='hidden' id='candidate_asset_weights_json'>
                   </div>
 
                   <div>
@@ -483,6 +505,10 @@
                   class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
                   <span class="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>Baostock
                 </button>
+                <button type='button' data-source='eastmoney'
+                  class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-cyan-400 inline-block"></span>Eastmoney
+                </button>
                 <hr class="border-gray-600 my-1">
                 <button type='button' data-source='fred'
                   class="dl-source-option w-full text-left px-3 py-2 text-xs hover:bg-gray-700 flex items-center gap-2">
@@ -576,6 +602,7 @@
                     <option value='yahoo'>Yahoo Finance</option>
                     <option value='akshare'>AkShare</option>
                     <option value='baostock'>Baostock</option>
+                    <option value='eastmoney'>Eastmoney</option>
                     <option value='fred'>FRED (Macro)</option>
                   </select>
                 </div>
@@ -628,6 +655,7 @@
     let lastBacktestPayload = null;
     let loadedRegimeCandidateAssets = null;
     let loadedRegimeSafeAssets = null;
+    let loadedCandidateAssetWeights = null;
     let availableAlgorithms = [];
     let currentBatchResults = [];
     let currentResultIndex = 0;
@@ -703,7 +731,99 @@
       } else {
         regimeSizingToggle.disabled = false;
       }
+      updateCandidateWeightsVisibility();
       refreshPositionSizingSummary();
+    }
+
+    function getSelectedCandidateAssets() {
+      return (document.getElementById('candidate_assets').value || '')
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean);
+    }
+
+    function collectCandidateAssetWeights() {
+      const editor = document.getElementById('candidate-weights-editor');
+      if (!editor) return null;
+      const rows = Array.from(editor.querySelectorAll('[data-weight-asset]'));
+      if (!rows.length) return null;
+
+      const weights = {};
+      let hasPositive = false;
+      rows.forEach(input => {
+        const assetName = input.dataset.weightAsset;
+        const rawValue = Number(input.value);
+        if (assetName && Number.isFinite(rawValue) && rawValue > 0) {
+          weights[assetName] = rawValue;
+          hasPositive = true;
+        }
+      });
+      return hasPositive ? weights : null;
+    }
+
+    function syncCandidateWeightHiddenInput() {
+      const hidden = document.getElementById('candidate_asset_weights_json');
+      if (!hidden) return;
+      const weights = collectCandidateAssetWeights();
+      hidden.value = weights ? JSON.stringify(weights) : '';
+    }
+
+    function renderCandidateWeightEditor(preferredWeights = null) {
+      const panel = document.getElementById('candidate-weights-panel');
+      const editor = document.getElementById('candidate-weights-editor');
+      if (!panel || !editor) return;
+
+      const assetNames = getSelectedCandidateAssets();
+      const existingWeights = preferredWeights || collectCandidateAssetWeights() || loadedCandidateAssetWeights || {};
+      editor.innerHTML = '';
+
+      assetNames.forEach(assetName => {
+        const row = document.createElement('div');
+        row.className = 'weight-row';
+
+        const label = document.createElement('div');
+        label.className = 'weight-label';
+        label.textContent = assetName;
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.step = '0.01';
+        input.dataset.weightAsset = assetName;
+        input.value = existingWeights[assetName] !== undefined ? String(existingWeights[assetName]) : '1';
+        input.addEventListener('input', () => {
+          loadedCandidateAssetWeights = collectCandidateAssetWeights();
+          syncCandidateWeightHiddenInput();
+          refreshPositionSizingSummary();
+        });
+
+        row.appendChild(label);
+        row.appendChild(input);
+        editor.appendChild(row);
+      });
+
+      syncCandidateWeightHiddenInput();
+      updateCandidateWeightsVisibility();
+    }
+
+    function resetCandidateWeightsEqual() {
+      const inputs = Array.from(document.querySelectorAll('#candidate-weights-editor [data-weight-asset]'));
+      inputs.forEach(input => {
+        input.value = '1';
+      });
+      loadedCandidateAssetWeights = collectCandidateAssetWeights();
+      syncCandidateWeightHiddenInput();
+      refreshPositionSizingSummary();
+    }
+
+    function updateCandidateWeightsVisibility() {
+      const panel = document.getElementById('candidate-weights-panel');
+      if (!panel) return;
+      const useRegimeAssetPools = document.getElementById('use_regime_asset_pools').checked;
+      const algorithm = document.getElementById('algorithm').value;
+      const hasCandidates = getSelectedCandidateAssets().length > 0;
+      const show = !useRegimeAssetPools && algorithm === 'permanent_portfolio_rebalance' && hasCandidates;
+      panel.classList.toggle('hidden', !show);
     }
 
     async function loadAlgorithms() {
@@ -767,6 +887,7 @@
       if (singleSection) singleSection.classList.toggle('hidden', enabled);
       if (candidatePanel) candidatePanel.classList.toggle('hidden', !enabled);
       updateStrategyBBaseWeightsVisibility();
+      updateCandidateWeightsVisibility();
       syncStrategyCandidateOptionStyles();
     }
 
@@ -846,6 +967,124 @@
         }
       }
       return String(detail);
+    }
+
+    function getRequiredAssetsForStrategyAlgorithms(selectedAlgorithms) {
+      const required = new Set();
+      (selectedAlgorithms || []).forEach(key => {
+        if (
+          key === 'regime_margin_recession_switch_rebalance' ||
+          key === 'regime_margin_drawdown_prosperity_rebalance'
+        ) {
+          required.add('Nasdaq100');
+          required.add('US3M');
+        }
+      });
+      return Array.from(required);
+    }
+
+    function collectBacktestRequiredAssets({
+      useStrategyCandidates,
+      selectedStrategyAlgorithms,
+      useRegimeAssetPools,
+      selectedAssetCols,
+      selectedBenchmarkCols,
+      selectedSafeCols,
+      selectedRegimeCols,
+    }) {
+      const names = new Set();
+      const addMany = values => {
+        (values || []).forEach(value => {
+          const name = String(value || '').trim();
+          if (name) names.add(name);
+        });
+      };
+
+      addMany(selectedBenchmarkCols);
+      if (useRegimeAssetPools) {
+        addMany(selectedRegimeCols);
+      } else {
+        addMany(selectedAssetCols);
+        addMany(selectedSafeCols.length > 0 ? selectedSafeCols : ['20Y_Treasury_ETF', 'GoldIndex', 'US3M']);
+      }
+      if (useStrategyCandidates) {
+        addMany(getRequiredAssetsForStrategyAlgorithms(selectedStrategyAlgorithms));
+      }
+      return Array.from(names);
+    }
+
+    async function triggerSelectedAssetDownload(selectedNames) {
+      const currentSource = document.getElementById('download-source-toggle').dataset.selected || 'auto';
+      const payload = { names: selectedNames };
+      if (currentSource && currentSource !== 'auto') {
+        payload.downloader = currentSource;
+      }
+      const res = await fetch('/api/assets/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(formatApiError(data.detail || 'Asset download failed'));
+      }
+      return data;
+    }
+
+    async function triggerFullAssetProcessing() {
+      const res = await fetch('/api/assets/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(formatApiError(data.detail || 'Asset processing failed'));
+      }
+      return data;
+    }
+
+    async function syncEndDateToLatestSharedCoverage(requiredAssets) {
+      await loadAssets();
+      const assetEndDates = requiredAssets
+        .map(name => {
+          const asset = allAssetsList.find(item => item.name === name);
+          return {
+            name,
+            processed: Boolean(asset && asset.processed),
+            endDate: asset && asset.data_end_date ? String(asset.data_end_date) : null,
+          };
+        });
+
+      const missingCoverage = assetEndDates.filter(item => !item.endDate).map(item => item.name);
+      if (missingCoverage.length > 0) {
+        throw new Error(
+          'Missing local data coverage after refresh: ' + missingCoverage.join(', ')
+        );
+      }
+
+      const unprocessed = assetEndDates.filter(item => !item.processed).map(item => item.name);
+      if (unprocessed.length > 0) {
+        throw new Error(
+          'Some required assets are still not processed: ' + unprocessed.join(', ')
+        );
+      }
+
+      const latestSharedEndDate = assetEndDates
+        .map(item => item.endDate)
+        .reduce((minDate, current) => {
+          if (!minDate) return current;
+          return current < minDate ? current : minDate;
+        }, null);
+
+      if (!latestSharedEndDate) {
+        throw new Error('Unable to determine latest shared end date for the current backtest selection.');
+      }
+
+      const endDateInput = document.getElementById('end_date');
+      endDateInput.value = latestSharedEndDate;
+      refreshTrendModelSummary();
+      return latestSharedEndDate;
     }
 
     function createSummaryCard(title, lines) {
@@ -961,8 +1200,23 @@
       const weights = diagnostics.weights || {};
       const decisionInfo = diagnostics.decision_info || {};
       const layerCount = diagnostics.drawdown_layer_count ?? decisionInfo.drawdown_layers ?? 'n/a';
+      const regime = String(diagnostics.regime || 'sideways').toLowerCase();
+      const sourceMode = String(diagnostics.regime_source_mode || 'default');
+      const sourceClass = ['source-badge', sourceMode.replaceAll('_', '-')].join(' ');
+      const sourceLabelMap = {
+        historical_router_table: 'historical table',
+        online_current_fallback: 'online fallback',
+        default: 'default',
+      };
+      const sourceLabel = sourceLabelMap[sourceMode] || sourceMode.replaceAll('_', ' ');
+      const anchorRequested = diagnostics.regime_anchor_requested || 'n/a';
+      const anchorUsed = diagnostics.regime_anchor_used || 'n/a';
 
       container.appendChild(createSummaryCard('Overlay State', [
+        `Current regime: <span class="forecast-badge ${regime}">${regime}</span>`,
+        `Regime source: <span class="${sourceClass}">${sourceLabel}</span>`,
+        `Anchor requested: <strong>${anchorRequested}</strong>`,
+        `Anchor used: <strong>${anchorUsed}</strong>`,
         `Mode: <strong>${diagnostics.mode || 'n/a'}</strong>`,
         `5% drawdown layers: <strong>${layerCount}</strong>`,
         `Current drawdown: <strong>${Number.isFinite(drawdown) ? (drawdown * 100).toFixed(2) + '%' : 'n/a'}</strong>`,
@@ -1191,6 +1445,7 @@
       const useRegimeAssetPools = document.getElementById('use_regime_asset_pools').checked;
       const selectedAssets = (document.getElementById('candidate_assets').value || '').split(',').filter(Boolean);
       const safeAssets = (document.getElementById('safe_assets').value || '').split(',').filter(Boolean);
+      const candidateWeights = collectCandidateAssetWeights();
       const regimeCandidateAssets = buildRegimeMapFromZones('candidate');
       const regimeSafeAssets = buildRegimeMapFromZones('safe');
 
@@ -1214,6 +1469,7 @@
           `Top K: <strong>${topK}</strong>`,
           `Target volatility: <strong>${formatPct(targetVol, 0)}</strong>`,
           `Vol lookback: <strong>${volLookback}</strong> days${Number(volScaleLookback) > 0 ? `, scale window <strong>${volScaleLookback}</strong> days` : ', scale window uses main vol lookback'}`,
+          `Rebalance cadence: <strong>${document.getElementById('rebalance_interval_days').value || '30'}</strong> calendar days`,
         ]));
 
         container.appendChild(createSummaryCard('Constraints & Allocation', [
@@ -1232,6 +1488,7 @@
         `Top K: <strong>${topK}</strong>`,
         `Target volatility: <strong>${formatPct(targetVol, 0)}</strong>`,
         `Vol lookback: <strong>${volLookback}</strong> days${Number(volScaleLookback) > 0 ? `, scale window <strong>${volScaleLookback}</strong> days` : ', scale window uses main vol lookback'}`,
+        `Rebalance cadence: <strong>${document.getElementById('rebalance_interval_days').value || '30'}</strong> calendar days`,
       ]));
 
       container.appendChild(createSummaryCard('Constraints & Allocation', [
@@ -1242,6 +1499,17 @@
         `Regime sizing: <strong>${useRegimeSizing ? '4-state overlay enabled' : 'disabled'}</strong>`,
         `Residual capital: <strong>${fillResidual ? `sent to safe assets (${safeAssets.join(', ') || 'none selected'})` : 'left as cash'}</strong>`,
       ]));
+
+      if (document.getElementById('algorithm').value === 'permanent_portfolio_rebalance' && candidateWeights) {
+        const total = Object.values(candidateWeights).reduce((sum, value) => sum + Number(value), 0);
+        const lines = selectedAssets.map(assetName => {
+          const rawWeight = Number(candidateWeights[assetName] || 0);
+          const normalized = total > 0 ? rawWeight / total : 0;
+          return `${assetName}: <strong>${(normalized * 100).toFixed(1)}%</strong> <span class="summary-muted">(raw ${rawWeight.toFixed(2)})</span>`;
+        });
+        lines.push('<span class="summary-muted">First trade happens on the aligned start date once all selected assets have valid prices.</span>');
+        container.appendChild(createSummaryCard('Permanent Portfolio Weights', lines));
+      }
     }
 
     async function loadSavedConfigs() {
@@ -1273,6 +1541,7 @@
         const cfg = await res.json();
         loadedRegimeCandidateAssets = cfg.regime_candidate_assets || null;
         loadedRegimeSafeAssets = cfg.regime_safe_assets || null;
+        loadedCandidateAssetWeights = cfg.candidate_asset_weights || null;
         const selectedAlgorithmsFromConfig = Array.isArray(cfg.selected_algorithms)
           ? cfg.selected_algorithms.filter(Boolean)
           : [];
@@ -1353,8 +1622,9 @@
         ensureChips(cfg.candidate_assets, stratZone, 'strategy');
         ensureChips(cfg.benchmark_cols, benchZone, 'benchmark');
         ensureChips(cfg.safe_assets, safeZone, 'safe');
-  populateRegimeZones(loadedRegimeCandidateAssets, loadedRegimeSafeAssets);
+        populateRegimeZones(loadedRegimeCandidateAssets, loadedRegimeSafeAssets);
 
+        renderCandidateWeightEditor(cfg.candidate_asset_weights || null);
         updateHiddenInputs();
         refreshPositionSizingSummary();
         refreshTrendModelSummary();
@@ -1449,6 +1719,9 @@
 
       loadedRegimeCandidateAssets = buildRegimeMapFromZones('candidate');
       loadedRegimeSafeAssets = buildRegimeMapFromZones('safe');
+      renderCandidateWeightEditor();
+      loadedCandidateAssetWeights = collectCandidateAssetWeights();
+      syncCandidateWeightHiddenInput();
 
       const state = {
         strategy: stratChips.map(c => c.dataset.name),
@@ -1457,6 +1730,7 @@
         regime_mode: document.getElementById('use_regime_asset_pools').checked,
         regime_candidate_assets: loadedRegimeCandidateAssets,
         regime_safe_assets: loadedRegimeSafeAssets,
+        candidate_asset_weights: loadedCandidateAssetWeights,
       };
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -1557,6 +1831,7 @@
         updateRegimeAssetPoolMode();
         updateHiddenInputs();
       };
+      document.getElementById('reset-candidate-weights-btn').onclick = resetCandidateWeightsEqual;
       document.getElementById('asset_release_rule').onchange = updateReleaseLagEnabled;
 
       updateTrendModelEnabled();
@@ -1582,7 +1857,7 @@
         opt.addEventListener('click', () => {
           const src = opt.dataset.source;
           toggleBtn.dataset.selected = src;
-          const labelMap = { auto: 'Auto', yahoo: 'Yahoo', akshare: 'AkShare', baostock: 'Baostock', fred: 'FRED' };
+          const labelMap = { auto: 'Auto', yahoo: 'Yahoo', akshare: 'AkShare', baostock: 'Baostock', eastmoney: 'Eastmoney', fred: 'FRED' };
           document.getElementById('download-source-label').textContent = labelMap[src] || src;
           menu.classList.add('hidden');
         });
@@ -1637,6 +1912,7 @@
         yahoo:    { color: 'bg-blue-600',   label: 'Yahoo' },
         akshare:  { color: 'bg-yellow-600', label: 'AkShare' },
         baostock: { color: 'bg-purple-600', label: 'Baostock' },
+        eastmoney:{ color: 'bg-cyan-600',   label: 'Eastmoney' },
         fred:     { color: 'bg-red-600',    label: 'FRED' },
       };
 
@@ -1751,6 +2027,7 @@
             safeZone.innerHTML = '';
             clearRegimeZones();
             document.getElementById('use_regime_asset_pools').checked = regimeMode;
+            loadedCandidateAssetWeights = state.candidate_asset_weights || null;
             updateRegimeAssetPoolMode();
 
             if (state.strategy && Array.isArray(state.strategy)) {
@@ -1848,25 +2125,10 @@
       btn.textContent = 'Updating...';
 
       try {
-        const payload = { names: selectedNames };
-        if (currentSource && currentSource !== 'auto') {
-          payload.downloader = currentSource;
-        }
-        const res = await fetch('/api/assets/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const data = await res.json();
-        if (res.status === 429) {
-          alert(formatApiError(data.detail));
-        } else if (!res.ok) {
-          alert('Failed: ' + formatApiError(data.detail));
-        } else {
-            alert('Success: Data downloaded.');
-            loadAssets();
-        }
-      } catch (e) { alert('Download trigger failed'); }
+        await triggerSelectedAssetDownload(selectedNames);
+        alert('Success: Data downloaded.');
+        loadAssets();
+      } catch (e) { alert('Download trigger failed: ' + formatApiError(e.message || e)); }
       finally {
         btn.disabled = false;
         document.getElementById('download-source-toggle').disabled = false;
@@ -1882,20 +2144,11 @@
       btn.textContent = 'Processing...';
 
       try {
-        const res = await fetch('/api/assets/process', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          alert('Failed: ' + formatApiError(data.detail));
-        } else {
-          alert('Success: Data processed.');
-          loadAssets();
-        }
+        await triggerFullAssetProcessing();
+        alert('Success: Data processed.');
+        loadAssets();
       } catch (e) {
-        alert('Process trigger failed');
+        alert('Process trigger failed: ' + formatApiError(e.message || e));
       } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -1970,11 +2223,33 @@
           selectedRegimeCols.push(...((regimeSafeAssets || {})[regime] || []));
         });
       }
+
+      const requiredAssets = collectBacktestRequiredAssets({
+        useStrategyCandidates,
+        selectedStrategyAlgorithms,
+        useRegimeAssetPools,
+        selectedAssetCols,
+        selectedBenchmarkCols,
+        selectedSafeCols,
+        selectedRegimeCols,
+      });
+
+      if (useStrategyCandidates && requiredAssets.length > 0) {
+        try {
+          await triggerSelectedAssetDownload(requiredAssets);
+          await triggerFullAssetProcessing();
+          await syncEndDateToLatestSharedCoverage(requiredAssets);
+        } catch (err) {
+          loading.classList.add('hidden');
+          runBtn.disabled = false;
+          errorMsg.textContent = formatApiError(err.message || err);
+          errorMsg.style.display = 'block';
+          return;
+        }
+      }
       
       // 校验：不允许选择未 Process Data 的资产参与回测/基准/防御
-      const selectedAll = useRegimeAssetPools
-        ? [...selectedBenchmarkCols, ...selectedRegimeCols]
-        : [...selectedAssetCols, ...selectedBenchmarkCols, ...selectedSafeCols];
+      const selectedAll = requiredAssets;
       const notProcessed = selectedAll
         .filter(n => n)
         .filter((n, idx, arr) => arr.indexOf(n) === idx)
@@ -2002,6 +2277,7 @@
         end_date: document.getElementById('end_date').value || null,
         initial_capital: parseFloat(document.getElementById('initial_capital').value),
         candidate_assets: useRegimeAssetPools ? null : (selectedAssetCols.length > 0 ? selectedAssetCols : null),
+        candidate_asset_weights: useRegimeAssetPools ? null : collectCandidateAssetWeights(),
         benchmark_cols: selectedBenchmarkCols,
         safe_assets: useRegimeAssetPools ? [] : (selectedSafeCols.length > 0 ? selectedSafeCols : ["20Y_Treasury_ETF", "GoldIndex", "US3M"]),
         rebalance_interval_days: document.getElementById('rebalance_interval_days').value
@@ -2116,6 +2392,7 @@
     document.getElementById('save-config-btn').onclick = handleSaveConfig;
     document.getElementById('use_strategy_candidates').addEventListener('change', updateStrategyCandidateMode);
     document.getElementById('algorithm').addEventListener('change', updateStrategyBBaseWeightsVisibility);
+    document.getElementById('algorithm').addEventListener('change', updateCandidateWeightsVisibility);
     document.querySelectorAll('.strategy-candidate-toggle').forEach(input => {
       input.addEventListener('change', () => {
         syncStrategyCandidateOptionStyles();
@@ -2128,6 +2405,7 @@
     loadSavedConfigs();
     updateStrategyCandidateMode();
     updateStrategyBBaseWeightsVisibility();
+    updateCandidateWeightsVisibility();
 
     // Sync Assets Management panel height to match Configuration panel height
     function syncPanelHeights() {
