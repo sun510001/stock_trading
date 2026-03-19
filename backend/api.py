@@ -30,6 +30,10 @@ from backend.assets_config import AssetConfigManager
 from data_loader.yahoo_downloader import YahooIncrementalLoader
 from data_loader.akshare_downloader import AkshareIncrementalLoader
 from data_loader.baostock_downloader import BaostockIncrementalLoader
+from data_loader.eastmoney_index_downloader import (
+    EastmoneyDownloadConfig,
+    EastmoneyIndexDownloader,
+)
 from data_loader.data_processor import DataProcessor
 from data_loader.fred_downloader import FREDIncrementalLoader, MACRO_SERIES
 from data_loader.regime_dataset_builder import RegimeDatasetBuilder
@@ -243,7 +247,7 @@ class AssetModels:
         downloader: Optional[str] = Field(
             None,
             description=(
-                "Canonical download backend: 'yahoo', 'akshare', 'baostock', or 'fred'. "
+                "Canonical download backend: 'yahoo', 'akshare', 'baostock', 'eastmoney', or 'fred'. "
                 "When set, auto-mode uses this directly without probing."
             ),
         )
@@ -270,7 +274,7 @@ class AssetModels:
             None, description="Latest date in local CSV file"
         )
         source: Optional[str] = Field(
-            None, description="The origin of data (e.g., 'yahoo', 'akshare')"
+            None, description="The origin of data (e.g., 'yahoo', 'akshare', 'eastmoney')"
         )
         processed: bool = Field(
             False, description="Whether the asset exists in the aligned_assets.csv"
@@ -330,9 +334,31 @@ def _resolve_known_downloader(asset: Dict[str, Any]) -> str:
         return "yahoo"
     if known_source.startswith("akshare"):
         return "akshare"
-    if known_source in {"baostock", "fred"}:
+    if known_source in {"baostock", "eastmoney", "fred"}:
         return known_source
     return ""
+
+
+def _download_with_eastmoney(
+    data_path: str,
+    ticker: str,
+    name: str,
+    start_fallback: str,
+) -> bool:
+    """Download a CN quote via the raw Eastmoney kline endpoint."""
+    config = EastmoneyDownloadConfig(
+        symbol=str(ticker).strip(),
+        name=str(name).strip(),
+        start_date=str(start_fallback).strip(),
+        end_date=pd.Timestamp.today().strftime("%Y-%m-%d"),
+        output_dir=data_path,
+    )
+    downloader = EastmoneyIndexDownloader(config)
+    frame = downloader.download()
+    if frame.empty:
+        return False
+    downloader.save(frame)
+    return True
 
 
 def _can_try_akshare_us_fallback(ticker: str) -> bool:
@@ -679,9 +705,9 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
         akshare_loader = AkshareIncrementalLoader(storage_path=data_path)
         baostock_loader = BaostockIncrementalLoader(storage_path=data_path)
 
-        # Forced downloader override: 'yahoo' | 'akshare' | 'baostock' | 'fred' | 'auto'
+        # Forced downloader override: 'yahoo' | 'akshare' | 'baostock' | 'eastmoney' | 'fred' | 'auto'
         forced_dl = (req.downloader or "auto").strip().lower()
-        if forced_dl not in ("yahoo", "akshare", "baostock", "fred", "auto"):
+        if forced_dl not in ("yahoo", "akshare", "baostock", "eastmoney", "fred", "auto"):
             forced_dl = "auto"
         logger.info(f"Download mode: {forced_dl.upper()}")
 
@@ -762,6 +788,8 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
                     success = akshare_loader.download_symbol(ticker, name, start_fallback, source=ak_source)
                 elif forced_dl == "baostock":
                     success = baostock_loader.download_symbol(ticker, name, start_fallback)
+                elif forced_dl == "eastmoney":
+                    success = _download_with_eastmoney(data_path, ticker, name, start_fallback)
 
                 if success and asset.get("source") != forced_dl:
                     # Only overwrite source when it's a genuinely different backend
@@ -838,6 +866,14 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
                         success = baostock_loader.download_symbol(ticker, name, start_fallback)
                     except Exception as bs_err:
                         logger.warning(f"Baostock failed for {name}: {bs_err}")
+                        success = False
+
+                elif known_dl == "eastmoney":
+                    logger.info(f"Downloading known Eastmoney asset: {name} ({ticker})")
+                    try:
+                        success = _download_with_eastmoney(data_path, ticker, name, start_fallback)
+                    except Exception as em_err:
+                        logger.warning(f"Eastmoney failed for {name}: {em_err}")
                         success = False
 
                 elif known_dl == "fred":

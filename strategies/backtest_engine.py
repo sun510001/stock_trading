@@ -14,6 +14,11 @@ from strategies.algorithms import RebalanceAlgorithms, RebalanceContext, Rebalan
 class BacktestEngine:
     """Core backtest engine handling simulation and visualization."""
 
+    _LOOKBACK_FREE_ALGORITHMS = {
+        "permanent_portfolio_rebalance",
+        "signal_weighted_rebalance",
+    }
+
     def __init__(self, data_path: str, initial_capital: float = 10000.0) -> None:
         self.data_path: str = data_path
         self.initial_capital: float = initial_capital
@@ -56,6 +61,12 @@ class BacktestEngine:
             logger.error(f"Failed to load data: {str(e)}")
             raise
 
+    @classmethod
+    def _algorithm_requires_lookback_warmup(cls, rebalance_fn: Callable) -> bool:
+        """Return whether the selected algorithm depends on lookback windows."""
+        algo_name = getattr(rebalance_fn, "__name__", str(rebalance_fn))
+        return algo_name not in cls._LOOKBACK_FREE_ALGORITHMS
+
     def run_backtest(
         self,
         start_date: Optional[str] = None,
@@ -64,6 +75,7 @@ class BacktestEngine:
         rebalance_fn: Optional[Callable] = None,
         rebalance_interval_days: int = 30,
         candidate_assets: Optional[List[str]] = None,
+        candidate_asset_weights: Optional[Dict[str, float]] = None,
         regime_candidate_assets: Optional[Dict[str, List[str]]] = None,
         use_trend_model: bool = False,
         model_lookback_days: int = 60,
@@ -112,10 +124,13 @@ class BacktestEngine:
             rebalance_fn: Callable with signature
                 ``(ctx: RebalanceContext) -> RebalanceResult``.
                 Receives all market context and returns target positions.
-            rebalance_interval_days: Number of calendar days between
-                consecutive rebalance events (e.g. 30 for monthly).
+            rebalance_interval_days: Minimum number of calendar days between
+                consecutive executed rebalance events (e.g. 30 for monthly).
             candidate_assets: Optional list of column names to restrict the
                 asset universe; if None all columns are used.
+            candidate_asset_weights: Optional manual weight map keyed by
+                candidate asset name. Used by compatible strategies such as
+                permanent_portfolio_rebalance and normalized at runtime.
             regime_candidate_assets: Optional mapping from macro regime name
                 to candidate asset lists. Compatible strategies can use this
                 to switch the investable risk bucket by inferred macro state.
@@ -228,12 +243,13 @@ class BacktestEngine:
             df_slice = df_slice[universe_cols]
             # Indices of all risk-candidate assets within the universe.
             candidate_col_indices: List[int] = list(range(len(ordered_candidate_assets)))
+            df_slice = df_slice.dropna(how="any")
         else:
             df_slice = df_slice.dropna(axis=1, how="all")
             candidate_col_indices = list(range(len(df_slice.columns)))
 
-        df_slice = df_slice.dropna(how="all").ffill().bfill()
-        data_filled = self.data.ffill().bfill()
+        df_slice = df_slice.dropna(how="all").ffill()
+        data_filled = self.data.ffill()
 
         actual_start = df_slice.index[0].strftime("%Y-%m-%d")
         actual_end = df_slice.index[-1].strftime("%Y-%m-%d")
@@ -243,6 +259,7 @@ class BacktestEngine:
 
         # Validate trend model feature columns against loaded data
         trend_feature_cols: Optional[List[str]] = None
+        trend_model_type_name = str(model_type).strip().lower() if model_type else ""
         if use_trend_model and trend_model is not None and hasattr(trend_model, "feature_cols"):
             trend_feature_cols = getattr(trend_model, "feature_cols") or None
             if trend_feature_cols:
@@ -268,6 +285,11 @@ class BacktestEngine:
             window = df_slice.iloc[end_idx - model_lookback_days : end_idx]
             if window.empty:
                 return None
+            if trend_model_type_name == "regime_horizon_router":
+                # Router inference is date-driven and uses the window end date as
+                # the anchor into its precomputed regime table; it does not
+                # require a dense feature matrix across every aligned column.
+                return window
             if trend_feature_cols:
                 full_window = data_filled.loc[window.index, trend_feature_cols].dropna(how="any")
             else:
@@ -304,10 +326,19 @@ class BacktestEngine:
                 if indices:
                     regime_safe_indices_by_name[str(regime_name).strip().lower()] = indices
 
+        candidate_asset_weights_by_name: Dict[str, float] = {}
+        if candidate_asset_weights:
+            for asset_name, raw_weight in candidate_asset_weights.items():
+                asset_key = str(asset_name).strip()
+                if asset_key not in col_names:
+                    continue
+                weight_value = float(raw_weight)
+                if np.isfinite(weight_value) and weight_value > 0.0:
+                    candidate_asset_weights_by_name[asset_key] = weight_value
+
         returns_arr = df_slice.pct_change(fill_method=None).fillna(0).values
 
         interval = rebalance_interval_days if rebalance_interval_days and rebalance_interval_days > 0 else 30
-        rb_indices = set(range(0, n_days, interval))
 
         # Pre-compute safe asset index positions (within the full universe col_names)
         safe_asset_indices: List[int] = []
@@ -316,8 +347,10 @@ class BacktestEngine:
                 if col in col_names:
                     safe_asset_indices.append(col_names.index(col))
 
-        # Minimum warm-up period before first rebalance
-        warmup = max(model_lookback_days if use_trend_model else 0, vol_lookback)
+        # Only lookback-driven strategies need a history warm-up.
+        history_warmup = vol_lookback if self._algorithm_requires_lookback_warmup(rebalance_fn) else 0
+        trend_warmup = model_lookback_days if use_trend_model else 0
+        warmup = max(trend_warmup, history_warmup)
 
         # ── 3. Initialise portfolio ────────────────────────────────────────────
         portfolio_history = np.zeros(n_days)
@@ -327,6 +360,9 @@ class BacktestEngine:
         current_units = np.zeros(n_assets)
         cash_balance = self.initial_capital
         current_regime = "sideways"
+        current_regime_mode = "default"
+        current_regime_anchor_requested = None
+        current_regime_anchor_used = None
         current_regime_confidence_margin = float("nan")
         current_recession_probability = float("nan")
         current_prosperity_share_20d = float("nan")
@@ -334,6 +370,7 @@ class BacktestEngine:
         current_nasdaq100_drawdown_from_peak = float("nan")
         last_decision_info: Dict[str, str] = {}
         strategy_state: Dict[str, object] = {}
+        last_rebalance_date: Optional[pd.Timestamp] = None
 
         # ── 4. Time Loop ───────────────────────────────────────────────────────
         for i in range(n_days):
@@ -342,35 +379,67 @@ class BacktestEngine:
             current_val = float(np.sum(current_asset_vals) + cash_balance)
             trend_window_df = _build_trend_window(i)
             if trend_window_df is not None and trend_model is not None:
+                latest_regime_payload = None
+                if hasattr(
+                    trend_model,
+                    "predict_latest_regime_payload_from_dataframe",
+                ):
+                    latest_regime_payload = trend_model.predict_latest_regime_payload_from_dataframe(
+                        trend_window_df
+                    )
+                if isinstance(latest_regime_payload, dict):
+                    current_regime = str(
+                        latest_regime_payload.get("regime", current_regime)
+                    )
+                    inferred_margin = latest_regime_payload.get("confidence_margin")
+                    if inferred_margin is not None:
+                        current_regime_confidence_margin = float(inferred_margin)
+                    inferred_probabilities = latest_regime_payload.get("probabilities")
+                    if isinstance(inferred_probabilities, dict):
+                        current_recession_probability = float(
+                            inferred_probabilities.get("recession", float("nan"))
+                        )
+                    current_regime_mode = str(
+                        latest_regime_payload.get("mode", current_regime_mode)
+                    )
+                    current_regime_anchor_requested = latest_regime_payload.get(
+                        "anchor_date_requested"
+                    )
+                    current_regime_anchor_used = latest_regime_payload.get(
+                        "anchor_date_used"
+                    )
                 if hasattr(
                     trend_model,
                     "predict_latest_regime_from_dataframe",
                 ):
-                    current_regime = str(
-                        trend_model.predict_latest_regime_from_dataframe(
-                            trend_window_df
+                    if not isinstance(latest_regime_payload, dict):
+                        current_regime = str(
+                            trend_model.predict_latest_regime_from_dataframe(
+                                trend_window_df
+                            )
                         )
-                    )
                 if hasattr(
                     trend_model,
                     "predict_latest_regime_confidence_margin_from_dataframe",
                 ):
-                    inferred_margin = trend_model.predict_latest_regime_confidence_margin_from_dataframe(
-                        trend_window_df
-                    )
-                    if inferred_margin is not None:
-                        current_regime_confidence_margin = float(inferred_margin)
+                    if not isinstance(latest_regime_payload, dict):
+                        inferred_margin = trend_model.predict_latest_regime_confidence_margin_from_dataframe(
+                            trend_window_df
+                        )
+                        if inferred_margin is not None:
+                            current_regime_confidence_margin = float(inferred_margin)
                 if hasattr(
                     trend_model,
                     "predict_latest_regime_probabilities_from_dataframe",
                 ):
-                    inferred_probabilities = trend_model.predict_latest_regime_probabilities_from_dataframe(
-                        trend_window_df
-                    )
-                    if inferred_probabilities is not None:
-                        current_recession_probability = float(
-                            inferred_probabilities.get("recession", float("nan"))
+                    if not isinstance(latest_regime_payload, dict):
+                        inferred_probabilities = trend_model.predict_latest_regime_probabilities_from_dataframe(
+                            trend_window_df
                         )
+                        if inferred_probabilities is not None:
+                            current_recession_probability = float(
+                                inferred_probabilities.get("recession", float("nan"))
+                            )
 
             rolling_regime_window = regime_history[-19:] + [current_regime]
             current_recession_share_20d = float(
@@ -398,7 +467,8 @@ class BacktestEngine:
                 )
             ) if rolling_regime_window else float("nan")
 
-            if i in rb_indices:
+            should_rebalance = last_rebalance_date is None or (dates[i] - last_rebalance_date).days >= interval
+            if should_rebalance:
                 # Skip rebalance until warm-up period has elapsed
                 if i < warmup:
                     portfolio_history[i] = current_val
@@ -543,6 +613,7 @@ class BacktestEngine:
                     max_leverage=max_leverage,
                     safe_asset_indices=safe_asset_indices,
                     candidate_indices=candidate_col_indices,
+                    candidate_asset_weights=candidate_asset_weights_by_name,
                     col_names=col_names,
                     max_asset_weight=max_asset_weight,
                     vol_scale_lookback=vol_scale_lookback,
@@ -566,6 +637,7 @@ class BacktestEngine:
                 current_units = result.new_units
                 cash_balance = result.new_cash
                 current_val = float(np.sum(current_units * today_prices) + cash_balance)
+                last_rebalance_date = dates[i]
 
                 total_exposure = float(np.sum(current_units * today_prices)) / current_val if current_val > 0 else 0.0
                 logger.info(
@@ -653,6 +725,9 @@ class BacktestEngine:
         self.strategy_diagnostics = self._normalize_forecast_payload(
             {
                 "regime": str(current_regime),
+                "regime_source_mode": current_regime_mode,
+                "regime_anchor_requested": current_regime_anchor_requested,
+                "regime_anchor_used": current_regime_anchor_used,
                 "prosperity_share_20d": current_prosperity_share_20d,
                 "recession_share_20d": current_recession_share_20d,
                 "nasdaq100_drawdown_from_peak": current_nasdaq100_drawdown_from_peak,

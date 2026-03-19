@@ -9,6 +9,11 @@ Designed for long-term asset allocation research (e.g., momentum-based, volatili
 <details>
 <summary><strong>Changelog</strong></summary>
 
+- **2026-03-19**
+  - Changed `rebalance_interval_days` semantics in `BacktestEngine` from row-step trading intervals to minimum calendar days between executed rebalances.
+  - Removed future-price backfilling from backtest slicing. Selected-universe backtests now auto-align their effective start date to the first date where the chosen tradeable assets all have valid prices.
+  - Exempted lookback-free weight-only algorithms such as `permanent_portfolio_rebalance` and `signal_weighted_rebalance` from `vol_lookback` warmup so they can invest on the aligned start date.
+
 - **2026-03-08**
   - Added `torch_regression` as a first-class runtime trend-model type across the backend config model, engine integration, and Web UI.
   - Upgraded `GET /api/trend_models` to support `model_type` filtering and cleaner discovery of persisted PyTorch artifacts.
@@ -174,10 +179,13 @@ The engine discovers the right method via `hasattr` in the following priority or
 - **Key Config Fields** (`BacktestConfig`):
   - `algorithm` — rebalance function name (default: `permanent_portfolio_rebalance`)
   - `benchmark_cols` — benchmarks for chart and Alpha/Beta calculation (first entry is used for stats)
+  - `rebalance_interval_days` — minimum calendar days between executed rebalances, not trading-row steps
+  - `candidate_assets` — when provided, the effective backtest start is aligned to the first date where the selected tradeable assets all have valid prices
   - `use_trend_model` / `trend_model_type` / `model_path` — optional ML trend overlay
   - `top_k`, `target_volatility`, `max_leverage`, `safe_assets` — passed to `RebalanceContext`
   - `max_asset_weight` — per-asset weight cap; excess is redistributed among other selected assets
   - `vol_scale_lookback` — short trailing window for vol estimation in the scaling layer; `0` = use `vol_lookback`
+  - `vol_lookback` — past trading days used by lookback-based strategies; weight-only algorithms do not need this warmup to open the first position
   - `momentum_threshold` — minimum cumulative return required for an asset to pass the absolute-momentum filter
   - `use_sharpe_weighting` — if `True`, allocation weights are proportional to Sharpe-proxy (return / vol)
   - `min_blend` — minimum soft-gate risk allocation even when the trend model turns bearish
@@ -205,11 +213,15 @@ The engine discovers the right method via `hasattr` in the following priority or
 - **Trend-model picker**: supports `torch_regression` and compatible persisted model artifacts.
 - **Dynamic model discovery**: reloads model options when `trend_model_type` changes and preserves the currently selected folder when compatible.
 - **Positioning controls**: exposes `fill_residual_with_safe` alongside volatility-targeting controls so the user can choose between fully allocated risk/safe mixes and residual-cash behavior.
+- **Rebalance semantics**: the UI now labels `rebalance_interval_days` as calendar days and warns that the actual backtest start is aligned to the first date where the selected tradeable assets all have valid prices.
 - **Updated defaults**: aligns the UI safe-asset defaults with the service layer by using `20Y_Treasury_ETF`, `GoldIndex`, and `US3M`.
 
 ### `strategies/backtest_engine.py` — Execution Engine
 
 - **Shared CSV ingestion**: now uses `utils.csv_utils.load_date_indexed_csv()` so legacy aligned files are normalised before slicing or plotting.
+- **Calendar-day rebalancing**: `rebalance_interval_days` is enforced as minimum elapsed natural days between executed rebalances.
+- **Aligned trading start**: when candidate or regime-specific tradeable universes are supplied, the engine starts on the first date where those tradeable assets all have real prices instead of backfilling future observations into earlier history.
+- **Warmup scoping**: weight-only algorithms such as `permanent_portfolio_rebalance` are allowed to trade on the aligned start date because they do not depend on lookback windows.
 - **Expanded runtime context**: forwards `fill_residual_with_safe` into `RebalanceContext`, enabling strategies to decide whether unused volatility budget should remain cash or park in safe assets.
 - **Decision-aware logs**: consumes `RebalanceResult.decision_info` and prints per-rebalance diagnostics alongside exposure and holdings, making risk/safe/cash transitions auditable from the log stream.
 

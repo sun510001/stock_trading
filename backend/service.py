@@ -37,7 +37,7 @@ class BacktestConfig(BaseModel):
     )
     rebalance_interval_days: int = Field(
         30,
-        description="Fixed interval in days for rebalancing",
+        description="Minimum calendar days between executed rebalances",
     )
     algorithm: str = Field(
         default="permanent_portfolio_rebalance",
@@ -55,8 +55,12 @@ class BacktestConfig(BaseModel):
         default=None,
         description=(
             "Optional list of columns to use as candidate assets; "
-            "if None, all columns in the data file will be used"
+            "if provided, the backtest starts from the first date where the selected tradeable assets all have real prices"
         ),
+    )
+    candidate_asset_weights: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Optional manual weight map for candidate assets used by permanent_portfolio_rebalance. Values are normalized at runtime and do not require vol_lookback warmup.",
     )
     regime_candidate_assets: Optional[Dict[str, List[str]]] = Field(
         default=None,
@@ -80,7 +84,7 @@ class BacktestConfig(BaseModel):
     )
     vol_lookback: int = Field(
         default=60,
-        description="Number of past days to compute inverse volatility and portfolio volatility",
+        description="Number of past trading days to compute inverse volatility and portfolio volatility for lookback-based strategies",
     )
     max_leverage: float = Field(
         default=1.0,
@@ -248,6 +252,7 @@ class BacktestService:
             rebalance_fn=rebalance_fn,
             rebalance_interval_days=cfg.rebalance_interval_days,
             candidate_assets=actual_candidate_assets,
+            candidate_asset_weights=cfg.candidate_asset_weights,
             regime_candidate_assets=cfg.regime_candidate_assets,
             use_trend_model=cfg.use_trend_model,
             model_lookback_days=cfg.model_lookback_days,
