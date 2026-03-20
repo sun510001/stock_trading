@@ -24,6 +24,7 @@ from logger import logger
 from utils.naming import sanitize_filename
 
 
+_PRIVATE_KEY_DIR = PROJECT_ROOT / ".private_data" / "key"
 _EASTMONEY_KLINE_URLS: tuple[str, ...] = (
     "https://push2his.eastmoney.com/api/qt/stock/kline/get",
     "https://push2.eastmoney.com/api/qt/stock/kline/get",
@@ -31,14 +32,13 @@ _EASTMONEY_KLINE_URLS: tuple[str, ...] = (
 _EASTMONEY_SUGGEST_URL = "https://searchapi.eastmoney.com/api/suggest/get"
 _EASTMONEY_FUND_HISTORY_URL = "https://api.fund.eastmoney.com/f10/lsjz"
 _EASTMONEY_FUND_JS_URL = "https://fund.eastmoney.com/pingzhongdata/{symbol}.js"
-_EASTMONEY_SEARCH_TOKEN = "***REMOVED_EASTMONEY_SEARCH_TOKEN***"
+_EASTMONEY_SEARCH_TOKEN_FILE = _PRIVATE_KEY_DIR / "eastmoney_search_token.txt"
+_EASTMONEY_UT_TOKENS_FILE = _PRIVATE_KEY_DIR / "eastmoney_ut_tokens.txt"
+_EASTMONEY_SEARCH_TOKEN_ENV = "EASTMONEY_SEARCH_TOKEN"
+_EASTMONEY_UT_TOKENS_ENV = "EASTMONEY_UT_TOKENS"
 _SINA_SUGGEST_URL = "https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15,31,41&key={query}"
 _SINA_KLINE_URL = "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_sina_kline="
 _SINA_KLINE_LENGTHS: tuple[int, ...] = (1000, 260, 60)
-_KLINE_UT_TOKENS: tuple[str, ...] = (
-    "***REMOVED_EASTMONEY_UT_TOKEN***",
-    "***REMOVED_EASTMONEY_UT_TOKEN***",
-)
 _DEFAULT_MARKETS: tuple[int, ...] = (1, 0, 2, 47)
 _KLINE_PERIOD_MAP = {"daily": "101", "weekly": "102", "monthly": "103"}
 _KLINE_COLUMNS = [
@@ -56,6 +56,49 @@ _KLINE_COLUMNS = [
 ]
 _STANDARD_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 _FUND_HISTORY_PAGE_SIZE = 500
+
+
+def _load_secret_from_file(secret_path: Path) -> str | None:
+    if not secret_path.exists():
+        return None
+    try:
+        value = secret_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        logger.warning("[Eastmoney] Could not read key file %s: %s", secret_path, exc)
+        return None
+    return value or None
+
+
+def _split_secret_values(raw_values: Iterable[str]) -> tuple[str, ...]:
+    values: list[str] = []
+    for raw_value in raw_values:
+        for part in re.split(r"[\s,]+", raw_value.strip()):
+            if part:
+                values.append(part)
+    return tuple(dict.fromkeys(values))
+
+
+def _load_secret_values(secret_path: Path, env_var: str) -> tuple[str, ...]:
+    env_value = os.environ.get(env_var, "")
+    if env_value.strip():
+        return _split_secret_values([env_value])
+    file_value = _load_secret_from_file(secret_path)
+    if not file_value:
+        return ()
+    return _split_secret_values(file_value.splitlines())
+
+
+def _redact_sensitive_text(text: str, secrets: Iterable[str]) -> str:
+    sanitized = re.sub(
+        r"([?&](?:ut|token)=)[^&\s]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    for secret in secrets:
+        if secret:
+            sanitized = sanitized.replace(secret, "<redacted>")
+    return sanitized
 
 
 @dataclass(frozen=True)
@@ -78,6 +121,24 @@ class EastmoneyIndexDownloader:
     def __init__(self, config: EastmoneyDownloadConfig) -> None:
         self.config = config
         self.session = self._build_session()
+        self.search_token = self._load_search_token()
+        self.ut_tokens = _load_secret_values(
+            _EASTMONEY_UT_TOKENS_FILE,
+            _EASTMONEY_UT_TOKENS_ENV,
+        )
+
+    @staticmethod
+    def _load_search_token() -> str | None:
+        env_value = os.environ.get(_EASTMONEY_SEARCH_TOKEN_ENV, "").strip()
+        if env_value:
+            return env_value
+        return _load_secret_from_file(_EASTMONEY_SEARCH_TOKEN_FILE)
+
+    def _redact_error(self, exc: Exception) -> str:
+        secrets = list(self.ut_tokens)
+        if self.search_token:
+            secrets.append(self.search_token)
+        return _redact_sensitive_text(str(exc), secrets)
 
     @staticmethod
     def _build_session() -> requests.Session:
@@ -138,10 +199,16 @@ class EastmoneyIndexDownloader:
         return [f"{market}.{self.config.symbol}" for market in self.config.markets]
 
     def _discover_secids(self) -> list[str]:
+        if not self.search_token:
+            logger.info(
+                "[Eastmoney] Search token not configured; skipping suggest lookup for %s",
+                self.config.symbol,
+            )
+            return []
         params = {
             "input": self.config.symbol,
             "type": "14",
-            "token": _EASTMONEY_SEARCH_TOKEN,
+            "token": self.search_token,
             "count": "10",
         }
         try:
@@ -177,7 +244,7 @@ class EastmoneyIndexDownloader:
             logger.warning(
                 "[Eastmoney] Suggest API failed for %s: %s",
                 self.config.symbol,
-                exc,
+                self._redact_error(exc),
             )
             return []
 
@@ -241,7 +308,7 @@ class EastmoneyIndexDownloader:
             logger.warning(
                 "[EastmoneyFund] lsjz failed for %s: %s",
                 self.config.symbol,
-                exc,
+                self._redact_error(exc),
             )
             return None
 
@@ -289,7 +356,7 @@ class EastmoneyIndexDownloader:
             logger.warning(
                 "[EastmoneyFund] pingzhongdata failed for %s: %s",
                 self.config.symbol,
-                exc,
+                self._redact_error(exc),
             )
             return None
 
@@ -395,7 +462,7 @@ class EastmoneyIndexDownloader:
                     self.config.symbol,
                     sina_symbol,
                     data_len,
-                    exc,
+                    self._redact_error(exc),
                 )
                 continue
             rows = self._parse_sina_kline_payload(response.text)
@@ -466,13 +533,20 @@ class EastmoneyIndexDownloader:
         return self._extract_klines(payload)
 
     def _fetch_klines(self) -> tuple[str, list[str]]:
-        last_error: Exception | None = None
+        if not self.ut_tokens:
+            raise RuntimeError(
+                "Eastmoney UT tokens are required for kline requests. "
+                "Save one token per line to .private_data/key/eastmoney_ut_tokens.txt "
+                f"or set {_EASTMONEY_UT_TOKENS_ENV} as a comma-separated list."
+            )
+
+        last_error: str | None = None
         secids = self._discover_secids() or self._fallback_secids()
         attempts = [
             (url, secid, ut_token, use_jsonp)
             for secid in secids
             for url in _EASTMONEY_KLINE_URLS
-            for ut_token in _KLINE_UT_TOKENS
+            for ut_token in self.ut_tokens
             for use_jsonp in (False, True)
         ]
         for url, secid, ut_token, use_jsonp in attempts:
@@ -501,22 +575,19 @@ class EastmoneyIndexDownloader:
                     use_jsonp,
                 )
             except Exception as exc:
-                last_error = exc
+                last_error = self._redact_error(exc)
                 logger.warning(
-                    "[Eastmoney] %s failed for %s via secid=%s jsonp=%s ut=%s: %s",
+                    "[Eastmoney] %s failed for %s via secid=%s jsonp=%s: %s",
                     url,
                     self.config.symbol,
                     secid,
                     use_jsonp,
-                    ut_token,
-                    exc,
+                    last_error,
                 )
             time.sleep(self.config.pause_seconds)
 
         if last_error is not None:
-            raise RuntimeError(
-                f"Eastmoney request failed for {self.config.symbol}: {last_error}"
-            )
+            raise RuntimeError(f"Eastmoney request failed for {self.config.symbol}: {last_error}")
         raise RuntimeError(f"Eastmoney returned no data for {self.config.symbol}")
 
     @staticmethod
