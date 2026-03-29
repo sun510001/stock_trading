@@ -969,6 +969,20 @@
       return String(detail);
     }
 
+    async function parseApiResponse(res) {
+      const rawText = await res.text();
+      if (!rawText) return null;
+
+      try {
+        return JSON.parse(rawText);
+      } catch (error) {
+        return {
+          detail: rawText,
+          parse_error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
     function getRequiredAssetsForStrategyAlgorithms(selectedAlgorithms) {
       const required = new Set();
       (selectedAlgorithms || []).forEach(key => {
@@ -1024,9 +1038,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = await parseApiResponse(res);
       if (!res.ok) {
-        throw new Error(formatApiError(data.detail || 'Asset download failed'));
+        throw new Error(formatApiError((data && data.detail) || 'Asset download failed'));
       }
       return data;
     }
@@ -1037,9 +1051,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const data = await res.json();
+      const data = await parseApiResponse(res);
       if (!res.ok) {
-        throw new Error(formatApiError(data.detail || 'Asset processing failed'));
+        throw new Error(formatApiError((data && data.detail) || 'Asset processing failed'));
       }
       return data;
     }
