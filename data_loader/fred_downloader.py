@@ -76,13 +76,8 @@ MACRO_SERIES: List[Dict[str, Any]] = [
         "start_date": "1997-01-01",
         "frequency": "d",  # daily
     },
-    {
-        "series_id": "NAPM",
-        "name": "ISM_PMI",
-        "description": "ISM Manufacturing: PMI Composite Index (monthly)",
-        "start_date": "1950-01-01",
-        "frequency": "m",  # monthly
-    },
+    # FRED series NAPM / ISM_PMI currently returns "series does not exist";
+    # keep it out of the default daily macro refresh until a replacement is chosen.
     {
         "series_id": "IC4WSA",
         "name": "JOBLESS_CLAIMS",

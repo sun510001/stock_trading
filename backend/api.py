@@ -251,6 +251,13 @@ class AssetModels:
                 "When set, auto-mode uses this directly without probing."
             ),
         )
+        fallback_downloads: Optional[List[Dict[str, Any]]] = Field(
+            None,
+            description=(
+                "Ordered fallback download definitions. Each item may set downloader, "
+                "ticker, source, and frequency while keeping the canonical asset name."
+            ),
+        )
         release_rule: Optional[str] = Field(
             None,
             description=(
@@ -387,6 +394,72 @@ def _can_try_baostock_fallback(ticker: str) -> bool:
         True when Baostock has a supported symbol mapping.
     """
     return BaostockIncrementalLoader._to_baostock_ticker(str(ticker or "").strip()) is not None
+
+
+def _download_configured_fallbacks(
+    *,
+    asset: Dict[str, Any],
+    name: str,
+    ticker: str,
+    start_fallback: str,
+    data_path: str,
+    akshare_loader: AkshareIncrementalLoader,
+    baostock_loader: BaostockIncrementalLoader,
+) -> bool:
+    """Try per-asset fallback downloaders without changing the canonical asset name."""
+    fallbacks = asset.get("fallback_downloads") or []
+    if not isinstance(fallbacks, list):
+        return False
+
+    for fallback in fallbacks:
+        if not isinstance(fallback, dict):
+            continue
+        fallback_downloader = str(fallback.get("downloader") or "").strip().lower()
+        fallback_ticker = str(fallback.get("ticker") or ticker).strip()
+        fallback_source = str(fallback.get("source") or fallback_downloader).strip().lower()
+        fallback_frequency = fallback.get("frequency") or asset.get("frequency")
+
+        logger.info(
+            f"Trying configured fallback for {name}: "
+            f"downloader={fallback_downloader}, ticker={fallback_ticker}, source={fallback_source}"
+        )
+
+        try:
+            if fallback_downloader == "fred":
+                # Store FRED fallback under data/<asset-name>.csv so price/yield
+                # assets keep the same downstream processing path and column name.
+                success = FREDIncrementalLoader(storage_path=data_path).download_series(
+                    series_id=fallback_ticker,
+                    name=name,
+                    start_date_fallback=start_fallback,
+                    frequency=str(fallback_frequency).strip().lower() if fallback_frequency else None,
+                )
+                if success:
+                    return True
+            if fallback_downloader == "akshare":
+                success = akshare_loader.download_symbol(
+                    fallback_ticker,
+                    name,
+                    start_fallback,
+                    source=fallback_source or "akshare",
+                )
+                if success:
+                    return True
+            if fallback_downloader == "baostock":
+                success = baostock_loader.download_symbol(fallback_ticker, name, start_fallback)
+                if success:
+                    return True
+            if fallback_downloader == "eastmoney":
+                success = _download_with_eastmoney(data_path, fallback_ticker, name, start_fallback)
+                if success:
+                    return True
+        except Exception as exc:
+            logger.warning(
+                f"Configured fallback failed for {name} "
+                f"({fallback_downloader}:{fallback_ticker}): {exc}"
+            )
+
+    return False
 
 
 def _normalize_macro_release_fields(asset: Dict[str, Any]) -> Dict[str, Any]:
@@ -808,32 +881,29 @@ def download_assets_endpoint(req: DownloadRequest) -> Dict[str, str]:
                     logger.info(f"Downloading known Yahoo asset: {name} ({ticker})")
                     success = yahoo_loader.download_symbol(ticker, name, start_fallback)
                     if not success:
-                        if _can_try_akshare_us_fallback(ticker):
-                            logger.warning(f"Yahoo failed for {name}. Attempting Akshare fallback...")
-                            success = akshare_loader.download_symbol(ticker, name, start_fallback)
+                        logger.info(f"Yahoo failed for {name}. Trying configured fallbacks.")
+                        success = _download_configured_fallbacks(
+                            asset=asset,
+                            name=name,
+                            ticker=ticker,
+                            start_fallback=start_fallback,
+                            data_path=data_path,
+                            akshare_loader=akshare_loader,
+                            baostock_loader=baostock_loader,
+                        )
+                    if not success:
+                        if _can_try_baostock_fallback(ticker):
+                            logger.info(f"Attempting Baostock fallback for {name}...")
+                            try:
+                                success = baostock_loader.download_symbol(ticker, name, start_fallback)
+                                if success:
+                                    asset["source"] = "baostock"
+                                    asset["downloader"] = "baostock"
+                                    updated_assets = True
+                            except Exception:
+                                success = False
                         else:
-                            logger.info(
-                                f"Yahoo failed for {name}. Skipping Akshare fallback because ticker {ticker!r} is not AkShare-US compatible."
-                            )
-                        if success:
-                            asset["source"] = "akshare"
-                            asset["downloader"] = "akshare"
-                            updated_assets = True
-                        else:
-                            if _can_try_baostock_fallback(ticker):
-                                logger.info(f"Akshare fallback failed for {name}. Attempting Baostock fallback...")
-                                try:
-                                    success = baostock_loader.download_symbol(ticker, name, start_fallback)
-                                    if success:
-                                        asset["source"] = "baostock"
-                                        asset["downloader"] = "baostock"
-                                        updated_assets = True
-                                except Exception:
-                                    success = False
-                            else:
-                                logger.info(
-                                    f"Akshare fallback failed for {name}. Skipping Baostock fallback because ticker {ticker!r} has no Baostock mapping."
-                                )
+                            logger.info(f"Baostock fallback not available for {name} ({ticker!r}).")
 
                 elif known_dl == "akshare":
                     # Handles: "akshare", "akshare_index", "akshare_etf",
